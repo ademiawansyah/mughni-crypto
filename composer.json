@@ -11,7 +11,6 @@
         "laravel/framework": "^13.0",
         "laravel/horizon": "^5.45",
         "laravel/pulse": "^1.7",
-        "laravel/telescope": "^5.20",
         "laravel/tinker": "^3.0",
         "stephenjude/filament-debugger": "^5.1"
     },

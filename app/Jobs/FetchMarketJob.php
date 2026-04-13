@@ -46,5 +46,7 @@ class FetchMarketJob implements ShouldQueue
         $coins = config('market.coins', []);
 
         $marketDataService->ingest($coins);
+
+        ProcessIndicatorJob::dispatch($coins);
     }
 }
