@@ -120,9 +120,9 @@ class MarketDataService
         $record->source = 'coingecko';
 
         // Indicator fields — not yet calculated; defaults satisfy NOT NULL constraints.
-        $record->rsi = 0.0;
-        $record->ema9 = 0.0;
-        $record->ema21 = 0.0;
+        $record->rsi = null;
+        $record->ema9 = null;
+        $record->ema21 = null;
         $record->trend = 'pending';
 
         $record->save();
