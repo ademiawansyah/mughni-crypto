@@ -50,6 +50,9 @@ redis-flush:
 	docker exec -it al_mughni php artisan queue:flush
 	docker exec -it fotoria php artisan queue:prune-failed
 
+boost-update:
+	docker exec -it al_mughni php artisan boost:update --discover
+
 
 # usage examples:
 # make artisan cmd="key:generate"
