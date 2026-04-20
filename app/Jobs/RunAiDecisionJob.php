@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\AiDecision;
 use App\Models\GeneralConfig;
 use App\Services\AI\AiAdvisorService;
+use App\Services\Notification\NotificationService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Queue\Queueable;
@@ -59,7 +60,7 @@ class RunAiDecisionJob implements ShouldQueue
      * Errors for individual coins are caught, logged, and skipped so remaining coins
      * are always processed.
      */
-    public function handle(AiAdvisorService $advisorService): void
+    public function handle(AiAdvisorService $advisorService, NotificationService $notificationService): void
     {
         $coins = $this->resolveCoins();
         $timeframes = $this->resolveTimeframes();
@@ -67,7 +68,7 @@ class RunAiDecisionJob implements ShouldQueue
         foreach ($coins as $coin) {
             foreach ($timeframes as $timeframe) {
                 try {
-                    $this->processOne($advisorService, $coin, $timeframe);
+                    $this->processOne($advisorService, $notificationService, $coin, $timeframe);
                 } catch (Throwable $e) {
                     Log::error('[RunAiDecisionJob] Unexpected failure — skipping coin', [
                         'coin' => $coin,
@@ -81,10 +82,15 @@ class RunAiDecisionJob implements ShouldQueue
     }
 
     /**
-     * Run one coin/timeframe cycle: call the advisor service and persist the result.
+     * Run one coin/timeframe cycle: call the advisor service, persist the result,
+     * and trigger a notification if the decision is a high-confidence trade candidate.
      */
-    private function processOne(AiAdvisorService $advisorService, string $coin, string $timeframe): void
-    {
+    private function processOne(
+        AiAdvisorService $advisorService,
+        NotificationService $notificationService,
+        string $coin,
+        string $timeframe
+    ): void {
         $result = $advisorService->advise($coin, $timeframe);
 
         if ($result === null) {
@@ -98,6 +104,10 @@ class RunAiDecisionJob implements ShouldQueue
 
         $indicator = $result['indicator'];
         $decision = $result['decision'];
+
+        // A trade candidate is a high-confidence BUY or SELL — the only signals worth acting on.
+        $isTradeCandidate = in_array($decision['action'], ['BUY', 'SELL'])
+            && $decision['confidence'] >= 60;
 
         $startedAt = microtime(true);
 
@@ -115,6 +125,7 @@ class RunAiDecisionJob implements ShouldQueue
             ],
             'action' => $decision['action'],
             'confidence' => $decision['confidence'],
+            'is_trade_candidate' => $isTradeCandidate,
             'risk_level' => $decision['risk_level'],
             'reason' => $decision['reason'],
             'price_at_decision' => $indicator->price,
@@ -122,6 +133,20 @@ class RunAiDecisionJob implements ShouldQueue
             'model_used' => $result['model_used'],
             'latency_ms' => (int) ((microtime(true) - $startedAt) * 1000),
         ]);
+
+        if ($isTradeCandidate) {
+            $notificationService->sendTradeSignal([
+                'coin' => $coin,
+                'timeframe' => $timeframe,
+                'action' => $decision['action'],
+                'confidence' => $decision['confidence'],
+                'risk_level' => $decision['risk_level'],
+                'reason' => $decision['reason'],
+                'entry' => $decision['entry'] ?? null,
+                'take_profit' => $decision['take_profit'] ?? null,
+                'stop_loss' => $decision['stop_loss'] ?? null,
+            ]);
+        }
 
         // Log::info('[RunAiDecisionJob] Decision persisted', [
         //     'coin' => $coin,

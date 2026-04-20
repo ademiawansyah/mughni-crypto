@@ -11,8 +11,6 @@ class AiDecision extends Model
 {
     use HasFactory;
 
-
-
     protected $table = 'ai_decisions';
 
     public $timestamps = false;
@@ -24,6 +22,7 @@ class AiDecision extends Model
         'input_data',
         'action',
         'confidence',
+        'is_trade_candidate',
         'risk_level',
         'reason',
         'price_at_decision',
@@ -39,6 +38,7 @@ class AiDecision extends Model
         return [
             'input_data' => 'array',
             'raw_response' => 'array',
+            'is_trade_candidate' => 'boolean',
             'timestamp' => 'datetime',
             'price_at_decision' => 'decimal:8',
             'price_after_5m' => 'decimal:8',
