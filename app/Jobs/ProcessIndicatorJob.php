@@ -2,7 +2,7 @@
 
 namespace App\Jobs;
 
-use App\Models\MarketIndicator;
+use App\Models\GeneralConfig;
 use App\Services\Indicator\IndicatorService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -50,7 +50,7 @@ class ProcessIndicatorJob implements ShouldQueue
     public function handle(IndicatorService $indicatorService): void
     {
         foreach (array_values(array_unique($this->coins)) as $coin) {
-            foreach ($this->resolveTimeframes($coin) as $timeframe) {
+            foreach ($this->resolveTimeframes() as $timeframe) {
                 $indicatorService->process($coin, $timeframe);
             }
         }
@@ -59,23 +59,19 @@ class ProcessIndicatorJob implements ShouldQueue
     }
 
     /**
-     * Resolve timeframes to process for a coin.
+     * Resolve timeframes to process.
+     *
+     * Uses the timeframe passed from the scheduler when available (preferred).
+     * Falls back to GeneralConfig so we never query the large market_indicators table.
      *
      * @return array<int, string>
      */
-    private function resolveTimeframes(string $coin): array
+    private function resolveTimeframes(): array
     {
         if ($this->timeframe !== null) {
             return [$this->timeframe];
         }
 
-        return MarketIndicator::query()
-            ->where('coin', $coin)
-            ->select('timeframe')
-            ->distinct()
-            ->pluck('timeframe')
-            ->filter()
-            ->values()
-            ->all();
+        return GeneralConfig::getArray('timeframes', ['5m']);
     }
 }

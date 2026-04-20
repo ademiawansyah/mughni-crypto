@@ -1,4 +1,4 @@
-.PHONY: build up down restart logs shell artisan composer migrate seed test
+.PHONY: build up down restart logs shell artisan composer migrate seed test run
 
 build:
 	docker-compose build
@@ -57,6 +57,10 @@ run-scheduler:
 	docker exec -it al_mughni php artisan schedule:work
 
 run-queue:
+	docker exec -it al_mughni php artisan queue:work --sleep=3 --tries=3
+
+run-worker:
+	docker exec -d al_mughni php artisan schedule:work
 	docker exec -it al_mughni php artisan queue:work --sleep=3 --tries=3
 
 

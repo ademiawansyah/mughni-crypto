@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\GeneralConfig;
 use App\Services\Market\MarketDataService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -12,11 +13,10 @@ use Illuminate\Queue\SerializesModels;
 /**
  * FetchMarketJob
  *
- * Queued job that triggers one full market data ingestion cycle.
- * The coin list is sourced from config/market.php to keep it configurable
- * without touching this class.
+ * Queued job that runs every minute and determines which timeframes are due
+ * based on the current time and the configured timeframes in GeneralConfig.
+ * Only timeframes whose interval aligns with the current minute are processed.
  *
- * Intended to run every 5 minutes via the scheduler.
  * No business logic lives here — all logic is delegated to MarketDataService.
  */
 class FetchMarketJob implements ShouldQueue
@@ -35,18 +35,64 @@ class FetchMarketJob implements ShouldQueue
      */
     public array $backoff = [30, 60, 120];
 
+    public function __construct() {}
+
     /**
      * Execute the job.
      *
-     * Reads the configured coin list and delegates ingestion to MarketDataService.
+     * Reads configured timeframes and coins from GeneralConfig, then processes
+     * only the timeframes whose interval aligns with the current minute.
      */
     public function handle(MarketDataService $marketDataService): void
     {
         /** @var array<string> $coins */
-        $coins = config('market.coins', []);
+        $coins = GeneralConfig::getCoins();
 
-        $marketDataService->ingest($coins);
+        /** @var array<string> $timeframes */
+        $timeframes = GeneralConfig::getArray('timeframes', ['5m']);
+
+        $dueTimeframes = array_filter($timeframes, fn (string $tf) => $this->isDue($tf));
+
+        if (empty($dueTimeframes)) {
+            return;
+        }
+
+        foreach ($dueTimeframes as $timeframe) {
+            $marketDataService->ingest($coins, $timeframe);
+        }
 
         ProcessIndicatorJob::dispatch($coins);
+    }
+
+    /**
+     * Determine whether a given timeframe is due at the current minute.
+     *
+     * Examples:
+     *   '1m'  → always true
+     *   '5m'  → true when minute % 5 === 0
+     *   '1h'  → true when minute === 0
+     *   '2h'  → true when minute === 0 and hour % 2 === 0
+     *
+     * @param  string  $timeframe  Timeframe string (e.g. '5m', '1h').
+     */
+    private function isDue(string $timeframe): bool
+    {
+        $now = now();
+        $minute = (int) $now->format('i');
+        $hour = (int) $now->format('G');
+
+        if (preg_match('/^(\d+)m$/', $timeframe, $matches)) {
+            $interval = (int) $matches[1];
+
+            return $interval === 1 || $minute % $interval === 0;
+        }
+
+        if (preg_match('/^(\d+)h$/', $timeframe, $matches)) {
+            $interval = (int) $matches[1];
+
+            return $minute === 0 && ($interval === 1 || $hour % $interval === 0);
+        }
+
+        return false;
     }
 }

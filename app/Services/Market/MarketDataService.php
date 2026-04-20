@@ -31,8 +31,9 @@ class MarketDataService
      * Run a full ingestion cycle for the given list of coins.
      *
      * @param  array<string>  $coins  CoinGecko coin IDs (e.g. ['bitcoin', 'ethereum'])
+     * @param  string  $timeframe  The scheduler timeframe that triggered this cycle (e.g. '5m').
      */
-    public function ingest(array $coins): void
+    public function ingest(array $coins, string $timeframe = '5m'): void
     {
         $payload = $this->coinGeckoService->fetchPrices($coins);
 
@@ -57,7 +58,7 @@ class MarketDataService
 
         foreach ($payload['coins'] as $coinData) {
             try {
-                $this->storeIndicator($coinData);
+                $this->storeIndicator($coinData, $timeframe);
             } catch (Throwable $e) {
                 // Log and continue — a single-coin failure must not stop the rest.
                 Log::error('[MarketDataService] Failed to persist data for coin', [
@@ -105,15 +106,16 @@ class MarketDataService
      * neutral defaults; they will be populated by IndicatorService in a later phase.
      *
      * @param  array<string, mixed>  $coinData  Structured single-coin data from CoinGeckoService.
+     * @param  string  $timeframe  The active scheduler timeframe (e.g. '5m', '15m').
      */
-    private function storeIndicator(array $coinData): void
+    private function storeIndicator(array $coinData, string $timeframe): void
     {
         /** @var Carbon $timestamp */
         $timestamp = $coinData['timestamp'];
 
         $record = new MarketIndicator;
         $record->coin = $coinData['coin'];
-        $record->timeframe = '5m';
+        $record->timeframe = $timeframe;
         $record->timestamp = $timestamp;
         $record->price = $coinData['price'] ?? 0.0;
         $record->volume = $coinData['volume_24h'] ?? 0.0;

@@ -61,7 +61,7 @@ class AiResponseParser
             return $this->fallback();
         }
 
-        Log::debug('[AiResponseParser] Raw AI content', ['content' => $content]);
+        // Log::debug('[AiResponseParser] Raw AI content', ['content' => $content]);
 
         // Step 1: direct JSON decode
         $parsed = $this->tryDirectJsonDecode($content);

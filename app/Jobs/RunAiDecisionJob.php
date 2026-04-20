@@ -3,8 +3,8 @@
 namespace App\Jobs;
 
 use App\Models\AiDecision;
+use App\Models\GeneralConfig;
 use App\Services\AI\AiAdvisorService;
-use Carbon\Carbon;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Queue\Queueable;
@@ -44,15 +44,12 @@ class RunAiDecisionJob implements ShouldQueue
     public array $backoff = [60, 120];
 
     /**
-     * The list of coins to process during this cycle.
-     * Defaults to config/market.php when not supplied explicitly.
-     *
-     * @param  array<string>  $coins
-     * @param  array<string>  $timeframes
+     * @param  array<string>  $coins  Leave empty to read from GeneralConfig at runtime.
+     * @param  array<string>  $timeframes  Leave empty to read from GeneralConfig at runtime.
      */
     public function __construct(
         private readonly array $coins = [],
-        private readonly array $timeframes = ['5m', '15m', '1h'],
+        private readonly array $timeframes = [],
     ) {}
 
     /**
@@ -65,9 +62,10 @@ class RunAiDecisionJob implements ShouldQueue
     public function handle(AiAdvisorService $advisorService): void
     {
         $coins = $this->resolveCoins();
+        $timeframes = $this->resolveTimeframes();
 
         foreach ($coins as $coin) {
-            foreach ($this->timeframes as $timeframe) {
+            foreach ($timeframes as $timeframe) {
                 try {
                     $this->processOne($advisorService, $coin, $timeframe);
                 } catch (Throwable $e) {
@@ -127,12 +125,12 @@ class RunAiDecisionJob implements ShouldQueue
             'latency_ms' => (int) ((microtime(true) - $startedAt) * 1000),
         ]);
 
-        Log::info('[RunAiDecisionJob] Decision persisted', [
-            'coin' => $coin,
-            'timeframe' => $timeframe,
-            'action' => $decision['action'],
-            'confidence' => $decision['confidence'],
-        ]);
+        // Log::info('[RunAiDecisionJob] Decision persisted', [
+        //     'coin' => $coin,
+        //     'timeframe' => $timeframe,
+        //     'action' => $decision['action'],
+        //     'confidence' => $decision['confidence'],
+        // ]);
     }
 
     /**
@@ -145,13 +143,25 @@ class RunAiDecisionJob implements ShouldQueue
      */
     private function resolveCoins(): array
     {
-        if (! empty($this->coins)) {
-            return array_values(array_unique($this->coins));
-        }
+        $coins = ! empty($this->coins)
+            ? $this->coins
+            : GeneralConfig::getCoins();
 
-        /** @var array<string> $configured */
-        $configured = config('market.coins', []);
+        return array_values(array_unique($coins));
+    }
 
-        return array_values(array_unique($configured));
+    /**
+     * Resolve the list of timeframes to process.
+     *
+     * Uses the constructor-provided list when available; otherwise reads directly
+     * from GeneralConfig so changes take effect without cache clears.
+     *
+     * @return array<string>
+     */
+    private function resolveTimeframes(): array
+    {
+        return ! empty($this->timeframes)
+            ? $this->timeframes
+            : GeneralConfig::getTimeframes();
     }
 }

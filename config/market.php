@@ -1,5 +1,7 @@
 <?php
 
+use App\Models\GeneralConfig;
+
 return [
 
     /*
@@ -7,12 +9,34 @@ return [
     | Tracked Coins
     |--------------------------------------------------------------------------
     |
-    | Comma-separated CoinGecko coin IDs to fetch on every ingestion cycle.
-    | Override via MARKET_COINS in your .env file.
+    | Managed dynamically via the general_config table (key: 'coins').
+    | Falls back to env/default if the table is not yet available.
     |
     */
-    'coins' => explode(',', env('MARKET_COINS', 'bitcoin,ethereum,solana')),
-    'timeframe' => env('MARKET_TIMEFRAME', '5m'),
+    'coins' => (function (): array {
+        try {
+            return GeneralConfig::getCoins();
+        } catch (Throwable) {
+            return explode(',', env('MARKET_COINS', 'bitcoin,ethereum,solana'));
+        }
+    })(),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Active Timeframes
+    |--------------------------------------------------------------------------
+    |
+    | Managed dynamically via the general_config table (key: 'timeframes').
+    | Falls back to env/default if the table is not yet available.
+    |
+    */
+    'timeframes' => (function (): array {
+        try {
+            return GeneralConfig::getTimeframes();
+        } catch (Throwable) {
+            return explode(',', env('MARKET_TIMEFRAMES', '5m,10m,15m'));
+        }
+    })(),
 
     /*
     |--------------------------------------------------------------------------
