@@ -12,6 +12,7 @@ return [
     |
     */
     'coins' => explode(',', env('MARKET_COINS', 'bitcoin,ethereum,solana')),
+    'timeframe' => env('MARKET_TIMEFRAME', '5m'),
 
     /*
     |--------------------------------------------------------------------------

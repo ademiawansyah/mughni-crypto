@@ -11,14 +11,34 @@ class AiDecision extends Model
 {
     use HasFactory;
 
+
+
     protected $table = 'ai_decisions';
 
     public $timestamps = false;
+
+    protected $fillable = [
+        'coin',
+        'timeframe',
+        'timestamp',
+        'input_data',
+        'action',
+        'confidence',
+        'risk_level',
+        'reason',
+        'price_at_decision',
+        'raw_response',
+        'model_used',
+        'latency_ms',
+        'market_trend',
+        'result',
+    ];
 
     protected function casts(): array
     {
         return [
             'input_data' => 'array',
+            'raw_response' => 'array',
             'timestamp' => 'datetime',
             'price_at_decision' => 'decimal:8',
             'price_after_5m' => 'decimal:8',

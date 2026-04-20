@@ -14,9 +14,9 @@ down:
 
 restart: down up
 
-rebuild: down build up
+refresh: down build up
 
-refresh: down build-fresh up
+rebuild: down build-fresh up
 
 logs:
 	docker-compose logs -f
@@ -52,6 +52,12 @@ redis-flush:
 
 boost-update:
 	docker exec -it al_mughni php artisan boost:update --discover
+
+run-scheduler:
+	docker exec -it al_mughni php artisan schedule:work
+
+run-queue:
+	docker exec -it al_mughni php artisan queue:work --sleep=3 --tries=3
 
 
 # usage examples:

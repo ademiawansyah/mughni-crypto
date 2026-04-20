@@ -54,6 +54,8 @@ class ProcessIndicatorJob implements ShouldQueue
                 $indicatorService->process($coin, $timeframe);
             }
         }
+
+        RunAiDecisionJob::dispatch($this->coins);
     }
 
     /**
