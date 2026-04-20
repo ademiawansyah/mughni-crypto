@@ -51,7 +51,7 @@ class FetchMarketJob implements ShouldQueue
         /** @var array<string> $timeframes */
         $timeframes = GeneralConfig::getArray('timeframes', ['5m']);
 
-        $dueTimeframes = array_filter($timeframes, fn (string $tf) => $this->isDue($tf));
+        $dueTimeframes = array_filter($timeframes, fn(string $tf) => $this->isDue($tf));
 
         if (empty($dueTimeframes)) {
             return;
@@ -61,7 +61,7 @@ class FetchMarketJob implements ShouldQueue
             $marketDataService->ingest($coins, $timeframe);
         }
 
-        ProcessIndicatorJob::dispatch($coins);
+        ProcessIndicatorJob::dispatch($coins, array_values($dueTimeframes));
     }
 
     /**
