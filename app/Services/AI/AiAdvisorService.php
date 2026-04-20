@@ -34,7 +34,7 @@ class AiAdvisorService
      * response, the indicator snapshot used as input, and the model that was used.
      * Returns null if no indicator data is available or the AI call fails completely.
      *
-     * @param  string  $coin       CoinGecko coin ID (e.g. 'bitcoin')
+     * @param  string  $coin  CoinGecko coin ID (e.g. 'bitcoin')
      * @param  string  $timeframe  Timeframe label (e.g. '5m', '15m', '1h')
      * @return array{
      *   indicator: MarketIndicator,
@@ -187,7 +187,6 @@ class AiAdvisorService
         $price = number_format((float) $indicator->price, 2, '.', '');
         $ema9 = number_format((float) $indicator->ema9, 2, '.', '');
         $ema21 = number_format((float) $indicator->ema21, 2, '.', '');
-        $volume = number_format((float) $indicator->volume, 2, '.', '');
         $rsi = round((float) $indicator->rsi, 2);
         $trend = $indicator->trend ?? 'unknown';
 
@@ -198,7 +197,6 @@ class AiAdvisorService
         EMA9: {$ema9}
         EMA21: {$ema21}
         Trend: {$trend}
-        Volume: {$volume}
 
         Evaluate strictly based on the defined rules and return JSON only.
         MSG;

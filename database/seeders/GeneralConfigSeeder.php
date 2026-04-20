@@ -19,7 +19,7 @@ class GeneralConfigSeeder extends Seeder
     public function run(): void
     {
         $defaults = [
-            'coins' => 'bitcoin,ethereum,solana',
+            'coins' => 'bitcoin,ethereum,solana,tether,xrp',
             'timeframes' => '5m,10m,15m',
         ];
 

@@ -110,8 +110,6 @@ class RunAiDecisionJob implements ShouldQueue
                 'rsi' => $indicator->rsi,
                 'ema9' => $indicator->ema9,
                 'ema21' => $indicator->ema21,
-                'volume' => $indicator->volume,
-                'volume_ma' => $indicator->volume_ma,
                 'trend' => $indicator->trend,
                 'timeframe' => $timeframe,
             ],

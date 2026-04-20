@@ -2,8 +2,8 @@
 
 namespace App\Services\External;
 
-use Carbon\Carbon;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -13,8 +13,9 @@ use Illuminate\Support\Facades\Log;
  * Responsible exclusively for communicating with the CoinGecko REST API.
  * It builds the HTTP request, handles failures gracefully, and returns a
  * normalised payload that includes both the raw API response (for audit
- * storage) and structured per-coin data.
+ * storage) and a flat array of time-series prices.
  *
+ * Responses are cached for 5 minutes per coin to prevent redundant API calls.
  * This class must NOT persist data to the database.
  */
 class CoinGeckoService
@@ -27,6 +28,9 @@ class CoinGeckoService
 
     private string $vsCurrency;
 
+    /** Cache TTL in minutes for market chart responses. */
+    private const CACHE_TTL_MINUTES = 2;
+
     public function __construct()
     {
         $this->baseUrl = config('market.coingecko.base_url');
@@ -36,28 +40,52 @@ class CoinGeckoService
     }
 
     /**
-     * Fetch live price data for one or more coins from /simple/price.
+     * Fetch time-series price data for a single coin from /coins/{id}/market_chart.
      *
-     * @param  array<string>  $coins  CoinGecko coin IDs (e.g. ['bitcoin', 'ethereum'])
+     * The response is cached for 5 minutes to avoid repeated API calls within
+     * the same processing cycle. Only successful responses are cached.
+     *
+     * @param  string  $coin  CoinGecko coin ID (e.g. 'bitcoin')
+     * @param  int  $days  Number of days of historical data to fetch
      * @return array{
      *     request_params: array<string, mixed>,
      *     raw_response: array<string, mixed>,
-     *     coins: array<int, array{
-     *         coin: string,
-     *         price: float|null,
-     *         volume_24h: float|null,
-     *         change_24h: float|null,
-     *         timestamp: Carbon,
-     *     }>,
+     *     prices: array<int, float>,
      * }|null  Returns null when the API call fails entirely.
      */
-    public function fetchPrices(array $coins): ?array
+    public function fetchMarketChart(string $coin, int $days = 1): ?array
+    {
+        $cacheKey = "coingecko_market_chart_{$coin}_{$days}_{$this->vsCurrency}";
+
+        if (Cache::has($cacheKey)) {
+            return Cache::get($cacheKey);
+        }
+
+        $result = $this->doFetchMarketChart($coin, $days);
+
+        if ($result !== null) {
+            Cache::put($cacheKey, $result, now()->addMinutes(self::CACHE_TTL_MINUTES));
+        }
+
+        return $result;
+    }
+
+    /**
+     * Perform the actual HTTP request to /coins/{id}/market_chart.
+     *
+     * @param  string  $coin  CoinGecko coin ID
+     * @param  int  $days  Number of days of data
+     * @return array{
+     *     request_params: array<string, mixed>,
+     *     raw_response: array<string, mixed>,
+     *     prices: array<int, float>,
+     * }|null
+     */
+    private function doFetchMarketChart(string $coin, int $days): ?array
     {
         $params = [
-            'ids' => implode(',', $coins),
-            'vs_currencies' => $this->vsCurrency,
-            'include_24hr_vol' => 'true',
-            'include_24hr_change' => 'true',
+            'vs_currency' => $this->vsCurrency,
+            'days' => $days,
         ];
 
         $request = Http::timeout($this->timeout)->baseUrl($this->baseUrl);
@@ -67,11 +95,11 @@ class CoinGeckoService
         }
 
         try {
-            $response = $request->get('/simple/price', $params);
+            $response = $request->get("/coins/{$coin}/market_chart", $params);
         } catch (ConnectionException $e) {
             Log::error('[CoinGeckoService] Connection failed', [
                 'exception' => $e->getMessage(),
-                'coins' => $coins,
+                'coin' => $coin,
             ]);
 
             return null;
@@ -81,38 +109,21 @@ class CoinGeckoService
             Log::error('[CoinGeckoService] HTTP request failed', [
                 'status' => $response->status(),
                 'body' => $response->body(),
-                'coins' => $coins,
+                'coin' => $coin,
             ]);
 
             return null;
         }
 
         $rawResponse = $response->json();
-        $timestamp = Carbon::now();
-        $structured = [];
 
-        foreach ($coins as $coin) {
-            if (! isset($rawResponse[$coin])) {
-                Log::warning('[CoinGeckoService] Coin missing from API response', ['coin' => $coin]);
-
-                continue;
-            }
-
-            $coinData = $rawResponse[$coin];
-
-            $structured[] = [
-                'coin' => $coin,
-                'price' => $coinData[$this->vsCurrency] ?? null,
-                'volume_24h' => $coinData["{$this->vsCurrency}_24h_vol"] ?? null,
-                'change_24h' => $coinData["{$this->vsCurrency}_24h_change"] ?? null,
-                'timestamp' => $timestamp,
-            ];
-        }
+        // Extract only the price values from the [timestamp, price] pairs.
+        $prices = array_map(fn ($item) => (float) $item[1], $rawResponse['prices'] ?? []);
 
         return [
-            'request_params' => $params,
+            'request_params' => array_merge(['coin' => $coin], $params),
             'raw_response' => $rawResponse,
-            'coins' => $structured,
+            'prices' => $prices,
         ];
     }
 }

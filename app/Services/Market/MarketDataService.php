@@ -5,6 +5,7 @@ namespace App\Services\Market;
 use App\Models\MarketIndicator;
 use App\Models\MarketRaw;
 use App\Services\External\CoinGeckoService;
+use App\Services\Indicator\IndicatorService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -12,19 +13,24 @@ use Throwable;
 /**
  * MarketDataService
  *
- * Orchestrates the market data ingestion pipeline:
- *   1. Fetch fresh price data from CoinGeckoService.
- *   2. Persist the full raw API response to `market_raw` (one row per API call).
- *   3. Persist normalised market data to `market_indicators` (one row per coin).
+ * Orchestrates the market data ingestion pipeline per coin:
+ *   1. Fetch time-series price data from CoinGeckoService (market_chart endpoint).
+ *   2. Persist the full raw API response to `market_raw` (one row per coin per call).
+ *   3. Validate that enough price data exists for indicator calculation (>= 21 points).
+ *   4. Calculate RSI, EMA9, EMA21, and trend via IndicatorService.
+ *   5. Persist the computed indicators to `market_indicators` (one row per coin).
  *
  * Raw storage always happens before processed storage.
  * A failure for one coin must not abort processing of the remaining coins.
- * No indicator calculations (RSI, EMA) are performed here.
  */
 class MarketDataService
 {
+    /** Minimum number of price data points required to compute indicators. */
+    private const MIN_PRICES = 21;
+
     public function __construct(
         private readonly CoinGeckoService $coinGeckoService,
+        private readonly IndicatorService $indicatorService,
     ) {}
 
     /**
@@ -35,34 +41,12 @@ class MarketDataService
      */
     public function ingest(array $coins, string $timeframe = '5m'): void
     {
-        $payload = $this->coinGeckoService->fetchPrices($coins);
-
-        if ($payload === null) {
-            Log::error('[MarketDataService] Ingestion aborted — CoinGeckoService returned no data.', [
-                'coins' => $coins,
-            ]);
-
-            return;
-        }
-
-        $rawTimestamp = isset($payload['coins'][0]['timestamp'])
-            ? $payload['coins'][0]['timestamp']
-            : Carbon::now();
-
-        $this->storeRaw(
-            implode(',', $coins),
-            $rawTimestamp,
-            $payload['request_params'],
-            $payload['raw_response'],
-        );
-
-        foreach ($payload['coins'] as $coinData) {
+        foreach ($coins as $coin) {
             try {
-                $this->storeIndicator($coinData, $timeframe);
+                $this->ingestCoin($coin, $timeframe);
             } catch (Throwable $e) {
-                // Log and continue — a single-coin failure must not stop the rest.
-                Log::error('[MarketDataService] Failed to persist data for coin', [
-                    'coin' => $coinData['coin'],
+                Log::error('[MarketDataService] Failed to ingest coin', [
+                    'coin' => $coin,
                     'exception' => $e->getMessage(),
                     'trace' => $e->getTraceAsString(),
                 ]);
@@ -71,21 +55,68 @@ class MarketDataService
     }
 
     /**
-     * Persist the raw CoinGecko API response for one API request.
+     * Run the full ingestion pipeline for a single coin.
      *
-     * Stores the full response JSON alongside the request parameters so that
-     * every ingestion cycle is fully auditable with no data loss.
+     * Fetches market chart data, stores raw response, validates price count,
+     * calculates indicators, and persists the resulting indicator record.
      *
-     * @param  string  $coins  Comma-separated list of requested coins.
+     * @param  string  $coin  CoinGecko coin ID.
+     * @param  string  $timeframe  Active scheduler timeframe.
+     */
+    private function ingestCoin(string $coin, string $timeframe): void
+    {
+        $payload = $this->coinGeckoService->fetchMarketChart($coin);
+
+        if ($payload === null) {
+            Log::error('[MarketDataService] Ingestion aborted — no data returned for coin', [
+                'coin' => $coin,
+            ]);
+
+            return;
+        }
+
+        $timestamp = Carbon::now();
+
+        $this->storeRaw($coin, $timestamp, $payload['request_params'], $payload['raw_response']);
+
+        $prices = $payload['prices'];
+
+        if (count($prices) < self::MIN_PRICES) {
+            Log::warning('[MarketDataService] Not enough price data for indicator calculation — skipping', [
+                'coin' => $coin,
+                'count' => count($prices),
+                'required' => self::MIN_PRICES,
+            ]);
+
+            return;
+        }
+
+        $indicators = $this->indicatorService->calculateFromPrices($prices);
+
+        if ($indicators === null) {
+            Log::warning('[MarketDataService] Indicator calculation returned null — skipping', [
+                'coin' => $coin,
+            ]);
+
+            return;
+        }
+
+        $this->storeIndicator($coin, $timeframe, $timestamp, $indicators);
+    }
+
+    /**
+     * Persist the raw CoinGecko API response for one coin request.
+     *
+     * @param  string  $coin  The coin ID.
      * @param  Carbon  $timestamp  Normalized timestamp for this ingestion cycle.
      * @param  array<string, mixed>  $requestParams  Params that were sent to the API.
      * @param  array<string, mixed>  $rawResponse  Full JSON body returned by the API.
      */
-    private function storeRaw(string $coins, Carbon $timestamp, array $requestParams, array $rawResponse): void
+    private function storeRaw(string $coin, Carbon $timestamp, array $requestParams, array $rawResponse): void
     {
         $record = new MarketRaw;
-        $record->coin = $coins;
-        $record->endpoint = 'simple_price';
+        $record->coin = $coin;
+        $record->endpoint = 'market_chart';
         $record->timestamp = $timestamp;
         $record->request_params = $requestParams;
         $record->response_json = $rawResponse;
@@ -93,47 +124,45 @@ class MarketDataService
         $record->save();
 
         Log::info('[MarketDataService] Raw data stored', [
-            'coin' => $coins,
+            'coin' => $coin,
             'raw_id' => $record->id,
             'timestamp' => $timestamp->toIso8601String(),
         ]);
     }
 
     /**
-     * Persist normalised market data for a single coin to `market_indicators`.
+     * Persist computed indicator data for a single coin to `market_indicators`.
      *
-     * Indicator fields (RSI, EMA, trend) are intentionally left at their zero/
-     * neutral defaults; they will be populated by IndicatorService in a later phase.
+     * All indicator fields are populated from the calculated values. Volume is
+     * intentionally excluded as it is not used in AI signal generation.
      *
-     * @param  array<string, mixed>  $coinData  Structured single-coin data from CoinGeckoService.
-     * @param  string  $timeframe  The active scheduler timeframe (e.g. '5m', '15m').
+     * @param  string  $coin  CoinGecko coin ID.
+     * @param  string  $timeframe  Active scheduler timeframe.
+     * @param  Carbon  $timestamp  Timestamp for this ingestion cycle.
+     * @param  array{price: float, rsi: float, ema9: float, ema21: float, trend: string}  $indicators  Calculated indicator values.
      */
-    private function storeIndicator(array $coinData, string $timeframe): void
+    private function storeIndicator(string $coin, string $timeframe, Carbon $timestamp, array $indicators): void
     {
-        /** @var Carbon $timestamp */
-        $timestamp = $coinData['timestamp'];
-
         $record = new MarketIndicator;
-        $record->coin = $coinData['coin'];
+        $record->coin = $coin;
         $record->timeframe = $timeframe;
         $record->timestamp = $timestamp;
-        $record->price = $coinData['price'] ?? 0.0;
-        $record->volume = $coinData['volume_24h'] ?? 0.0;
+        $record->price = $indicators['price'];
+        $record->rsi = $indicators['rsi'];
+        $record->ema9 = $indicators['ema9'];
+        $record->ema21 = $indicators['ema21'];
+        $record->trend = $indicators['trend'];
         $record->source = 'coingecko';
-
-        // Indicator fields — not yet calculated; defaults satisfy NOT NULL constraints.
-        $record->rsi = null;
-        $record->ema9 = null;
-        $record->ema21 = null;
-        $record->trend = 'pending';
-
         $record->save();
 
         Log::info('[MarketDataService] Indicator record stored', [
-            'coin' => $coinData['coin'],
+            'coin' => $coin,
             'indicator_id' => $record->id,
-            'price' => $coinData['price'],
-            'volume_24h' => $coinData['volume_24h'],
+            'price' => $indicators['price'],
+            'rsi' => $indicators['rsi'],
+            'ema9' => $indicators['ema9'],
+            'ema21' => $indicators['ema21'],
+            'trend' => $indicators['trend'],
             'timestamp' => $timestamp->toIso8601String(),
         ]);
     }

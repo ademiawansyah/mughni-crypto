@@ -9,8 +9,13 @@ use Illuminate\Support\Facades\Log;
 /**
  * IndicatorService
  *
- * Calculates RSI, EMA9, EMA21, and trend for a specific coin + timeframe.
- * It updates only the latest market_indicators row using recent historical data.
+ * Calculates RSI, EMA9, EMA21, and trend from a time-series prices array.
+ *
+ * Primary entry point is `calculateFromPrices()`, which accepts a flat array of
+ * float prices (oldest to newest) and returns all computed indicator values.
+ *
+ * The `process()` method is retained for backward compatibility but is
+ * superseded by the new price-array-based calculation flow.
  */
 class IndicatorService
 {
@@ -19,7 +24,47 @@ class IndicatorService
     private const RSI_PERIOD = 14;
 
     /**
+     * Calculate RSI, EMA9, EMA21, trend, and latest price from a prices array.
+     *
+     * Prices must be ordered oldest-to-newest. Returns null if there are fewer
+     * than 21 prices (minimum required for EMA21) or if any indicator is null.
+     *
+     * @param  array<int, float>  $prices  Time-ordered price array (oldest first)
+     * @return array{price: float, rsi: float, ema9: float, ema21: float, trend: string}|null
+     */
+    public function calculateFromPrices(array $prices): ?array
+    {
+        if (count($prices) < 21) {
+            return null;
+        }
+
+        /** @var Collection<int, float> $priceCollection */
+        $priceCollection = collect(array_values($prices))
+            ->map(fn (mixed $p): float => (float) $p);
+
+        $rsi = $this->calculateRsi($priceCollection);
+        $ema9 = $this->calculateEmaFromPrices($priceCollection, 9);
+        $ema21 = $this->calculateEmaFromPrices($priceCollection, 21);
+
+        if ($rsi === null || $ema9 === null || $ema21 === null) {
+            return null;
+        }
+
+        $trend = $this->calculateTrend($ema9, $ema21) ?? 'sideways';
+
+        return [
+            'price' => (float) $priceCollection->last(),
+            'rsi' => $rsi,
+            'ema9' => $ema9,
+            'ema21' => $ema21,
+            'trend' => $trend,
+        ];
+    }
+
+    /**
      * Calculate indicators for the latest row of the given coin and timeframe.
+     *
+     * Reads recent historical rows from market_indicators and updates the latest row.
      *
      * @param  string  $coin  Coin identifier (e.g. bitcoin).
      * @param  string  $timeframe  Timeframe key (e.g. 5m).
@@ -42,33 +87,37 @@ class IndicatorService
             return;
         }
 
+        /** @var array<int, float> $prices */
         $prices = $rows
             ->pluck('price')
-            ->map(static fn(mixed $price): float => (float) $price)
-            ->values();
+            ->map(static fn (mixed $price): float => (float) $price)
+            ->values()
+            ->all();
 
-        $rsi = $this->calculateRsi($prices);
-        $ema9 = $this->calculateEma($rows, $prices, 9, 'ema9');
-        $ema21 = $this->calculateEma($rows, $prices, 21, 'ema21');
-        $trend = $this->calculateTrend($ema9, $ema21);
+        $indicators = $this->calculateFromPrices($prices);
 
-        $payload = [
-            'rsi' => $rsi,
-            'ema9' => $ema9,
-            'ema21' => $ema21,
-        ];
+        if ($indicators === null) {
+            Log::warning('[IndicatorService] Not enough data for indicator calculation', [
+                'coin' => $coin,
+                'timeframe' => $timeframe,
+                'count' => count($prices),
+            ]);
 
-        if ($trend !== null) {
-            $payload['trend'] = $trend;
+            return;
         }
 
         MarketIndicator::query()
             ->whereKey($latestRow->id)
-            ->update($payload);
+            ->update([
+                'rsi' => $indicators['rsi'],
+                'ema9' => $indicators['ema9'],
+                'ema21' => $indicators['ema21'],
+                'trend' => $indicators['trend'],
+            ]);
     }
 
     /**
-     * Calculate RSI for the latest point using recent price differences.
+     * Calculate RSI using a standard 14-period SMA of gains and losses.
      *
      * @param  Collection<int, float>  $prices
      */
@@ -85,21 +134,14 @@ class IndicatorService
         }
 
         /** @var Collection<int, float> $recentDiffs */
-        $recentDiffs = $diffs
-            ->slice(-self::RSI_PERIOD)
-            ->values();
+        $recentDiffs = $diffs->slice(-self::RSI_PERIOD)->values();
 
         if ($recentDiffs->isEmpty()) {
             return null;
         }
 
-        $averageGain = $recentDiffs
-            ->map(static fn(float $diff): float => max($diff, 0.0))
-            ->avg();
-
-        $averageLoss = $recentDiffs
-            ->map(static fn(float $diff): float => max(-$diff, 0.0))
-            ->avg();
+        $averageGain = $recentDiffs->map(static fn (float $d): float => max($d, 0.0))->avg();
+        $averageLoss = $recentDiffs->map(static fn (float $d): float => max(-$d, 0.0))->avg();
 
         if ($averageGain === 0.0 && $averageLoss === 0.0) {
             return 50.0;
@@ -115,52 +157,50 @@ class IndicatorService
     }
 
     /**
-     * Calculate EMA value for the latest row.
+     * Calculate EMA from scratch using the full price series.
      *
-     * Uses previous row EMA if available; otherwise initializes from SMA.
+     * Seeds the EMA with the SMA of the first N periods, then applies the
+     * standard EMA formula iteratively for all remaining prices.
      *
-     * @param  Collection<int, MarketIndicator>  $rows
-     * @param  Collection<int, float>  $prices
+     * @param  Collection<int, float>  $prices  Full price series (oldest first)
+     * @param  int  $period  EMA period (e.g. 9, 21)
      */
-    private function calculateEma(Collection $rows, Collection $prices, int $period, string $emaField): ?float
+    private function calculateEmaFromPrices(Collection $prices, int $period): ?float
     {
         if ($prices->count() < $period) {
             return null;
         }
 
-        $latestPrice = (float) $prices->last();
-        $previousRow = $rows->get($rows->count() - 2);
+        $multiplier = 2.0 / ($period + 1.0);
 
-        if ($previousRow !== null && $previousRow->{$emaField} !== null) {
-            $previousEma = (float) $previousRow->{$emaField};
-            $multiplier = 2.0 / ($period + 1.0);
+        // Seed: SMA of the first N prices.
+        $ema = (float) $prices->slice(0, $period)->avg();
 
-            return ($latestPrice - $previousEma) * $multiplier + $previousEma;
+        // Iteratively apply EMA formula to all prices after the seed window.
+        foreach ($prices->slice($period)->values() as $price) {
+            $ema = ($price - $ema) * $multiplier + $ema;
         }
 
-        /** @var Collection<int, float> $seedWindow */
-        $seedWindow = $prices->slice(-$period)->values();
-
-        return $seedWindow->avg();
+        return $ema;
     }
 
     /**
-     * Determine trend from EMA9 and EMA21.
+     * Determine trend direction from EMA9 and EMA21.
+     *
+     * Considers "sideways" when the relative difference is less than 0.1%.
      */
     private function calculateTrend(?float $ema9, ?float $ema21): ?string
     {
-        if ($ema9 === null || $ema21 === null) {
+        if ($ema9 === null || $ema21 === null || $ema21 === 0.0) {
             return null;
         }
 
-        if ($ema9 > $ema21) {
-            return 'uptrend';
+        $relativeDiff = abs($ema9 - $ema21) / $ema21;
+
+        if ($relativeDiff < 0.001) {
+            return 'sideways';
         }
 
-        if ($ema9 < $ema21) {
-            return 'downtrend';
-        }
-
-        return 'sideways';
+        return $ema9 > $ema21 ? 'uptrend' : 'downtrend';
     }
 }

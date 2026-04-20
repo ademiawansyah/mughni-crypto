@@ -2,8 +2,6 @@
 
 namespace App\Jobs;
 
-use App\Models\GeneralConfig;
-use App\Services\Indicator\IndicatorService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Queue\Queueable;
@@ -13,8 +11,8 @@ use Illuminate\Queue\SerializesModels;
 /**
  * ProcessIndicatorJob
  *
- * Recomputes RSI, EMA9, EMA21, and trend for each configured coin.
- * Triggered after fresh market data has been inserted.
+ * Forwards to RunAiDecisionJob after market data ingestion.
+ * Indicator calculation is now performed inside MarketDataService during ingest.
  */
 class ProcessIndicatorJob implements ShouldQueue
 {
@@ -45,33 +43,11 @@ class ProcessIndicatorJob implements ShouldQueue
     /**
      * Execute the job.
      *
-     * Loops each coin and processes all relevant timeframes.
+     * Indicators are already calculated and stored by MarketDataService during
+     * the ingest phase. This job simply forwards to RunAiDecisionJob.
      */
-    public function handle(IndicatorService $indicatorService): void
+    public function handle(): void
     {
-        foreach (array_values(array_unique($this->coins)) as $coin) {
-            foreach ($this->resolveTimeframes() as $timeframe) {
-                $indicatorService->process($coin, $timeframe);
-            }
-        }
-
         RunAiDecisionJob::dispatch($this->coins);
-    }
-
-    /**
-     * Resolve timeframes to process.
-     *
-     * Uses the timeframe passed from the scheduler when available (preferred).
-     * Falls back to GeneralConfig so we never query the large market_indicators table.
-     *
-     * @return array<int, string>
-     */
-    private function resolveTimeframes(): array
-    {
-        if ($this->timeframe !== null) {
-            return [$this->timeframe];
-        }
-
-        return GeneralConfig::getArray('timeframes', ['5m']);
     }
 }
