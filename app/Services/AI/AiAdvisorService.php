@@ -3,6 +3,7 @@
 namespace App\Services\AI;
 
 use App\Models\MarketIndicator;
+use App\Services\MCP\McpResult;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -25,6 +26,7 @@ class AiAdvisorService
     public function __construct(
         private readonly LmStudioClient $client,
         private readonly AiResponseParser $parser,
+        private readonly AIPromptService $promptService,
     ) {}
 
     /**
@@ -36,6 +38,7 @@ class AiAdvisorService
      *
      * @param  string  $coin  CoinGecko coin ID (e.g. 'bitcoin')
      * @param  string  $timeframe  Timeframe label (e.g. '5m', '15m', '1h')
+     * @param  McpResult  $mcpResult  Structured MCP payload used to build the AI prompt
      * @return array{
      *   indicator: MarketIndicator,
      *   decision: array{action: string, confidence: int, risk_level: string, reason: string},
@@ -43,7 +46,7 @@ class AiAdvisorService
      *   model_used: string,
      * }|null
      */
-    public function advise(string $coin, string $timeframe): ?array
+    public function advise(string $coin, string $timeframe, McpResult $mcpResult): ?array
     {
         $indicator = $this->fetchLatestIndicator($coin, $timeframe);
 
@@ -56,7 +59,7 @@ class AiAdvisorService
             return null;
         }
 
-        $messages = $this->buildMessages($indicator);
+        $messages = $this->buildMessages($mcpResult);
 
         // Log::info('[AiAdvisorService] Sending prompt to LM Studio', [
         //     'coin' => $coin,
@@ -98,15 +101,16 @@ class AiAdvisorService
     }
 
     /**
-     * Build the LM Studio messages array from a MarketIndicator instance.
+     * Build the LM Studio messages array from a MarketIndicator and MCP context.
      *
      * Returns two messages:
-     *   - system: strict JSON-output instructions for the AI
-     *   - user: human-readable indicator snapshot with the decision prompt
+     *   - system: MCP-enriched prompt built by AIPromptService (role, strategy, rules, context)
+     *   - system: static trading constraints and output format rules
+     *   - user: MCP-enriched prompt built by AIPromptService (context, indicators, decision rules)
      *
      * @return array<int, array{role: string, content: string}>
      */
-    private function buildMessages(MarketIndicator $indicator): array
+    private function buildMessages(McpResult $mcpResult): array
     {
         return [
             [
@@ -115,13 +119,16 @@ class AiAdvisorService
             ],
             [
                 'role' => 'user',
-                'content' => $this->buildUserMessage($indicator),
+                'content' => $this->promptService->buildPrompt($mcpResult->toArray()),
             ],
         ];
     }
 
     /**
-     * Return the system-level instruction that constrains AI output to strict JSON.
+     * Return the static system-level instruction that constrains AI behaviour and output format.
+     *
+     * This is intentionally kept separate from the MCP prompt so that base trading rules
+     * remain stable across all requests regardless of per-cycle market context.
      */
     private function buildSystemMessage(): string
     {
@@ -228,29 +235,6 @@ class AiAdvisorService
         "reason": "No valid setup"
         }
         SYSTEM;
-    }
-
-    /**
-     * Build the user message containing indicator values and strict evaluation instruction.
-     */
-    private function buildUserMessage(MarketIndicator $indicator): string
-    {
-        $price = number_format((float) $indicator->price, 2, '.', '');
-        $ema9 = number_format((float) $indicator->ema9, 2, '.', '');
-        $ema21 = number_format((float) $indicator->ema21, 2, '.', '');
-        $rsi = round((float) $indicator->rsi, 2);
-        $trend = $indicator->trend ?? 'unknown';
-
-        return <<<MSG
-        Coin: {$indicator->coin}
-        Price: {$price}
-        RSI: {$rsi}
-        EMA9: {$ema9}
-        EMA21: {$ema21}
-        Trend: {$trend}
-
-        Evaluate strictly using the rules. Do not override them. Return JSON only.
-        MSG;
     }
 
     /**
