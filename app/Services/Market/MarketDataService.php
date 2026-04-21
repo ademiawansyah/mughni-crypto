@@ -123,11 +123,11 @@ class MarketDataService
         $record->source = 'coingecko';
         $record->save();
 
-        Log::info('[MarketDataService] Raw data stored', [
-            'coin' => $coin,
-            'raw_id' => $record->id,
-            'timestamp' => $timestamp->toIso8601String(),
-        ]);
+        // Log::info('[MarketDataService] Raw data stored', [
+        //     'coin' => $coin,
+        //     'raw_id' => $record->id,
+        //     'timestamp' => $timestamp->toIso8601String(),
+        // ]);
     }
 
     /**
@@ -155,15 +155,15 @@ class MarketDataService
         $record->source = 'coingecko';
         $record->save();
 
-        Log::info('[MarketDataService] Indicator record stored', [
-            'coin' => $coin,
-            'indicator_id' => $record->id,
-            'price' => $indicators['price'],
-            'rsi' => $indicators['rsi'],
-            'ema9' => $indicators['ema9'],
-            'ema21' => $indicators['ema21'],
-            'trend' => $indicators['trend'],
-            'timestamp' => $timestamp->toIso8601String(),
-        ]);
+        // Log::info('[MarketDataService] Indicator record stored', [
+        //     'coin' => $coin,
+        //     'indicator_id' => $record->id,
+        //     'price' => $indicators['price'],
+        //     'rsi' => $indicators['rsi'],
+        //     'ema9' => $indicators['ema9'],
+        //     'ema21' => $indicators['ema21'],
+        //     'trend' => $indicators['trend'],
+        //     'timestamp' => $timestamp->toIso8601String(),
+        // ]);
     }
 }
