@@ -2,6 +2,7 @@
 
 namespace App\Services\AI;
 
+use App\Services\Trading\MTFResultDTO;
 use InvalidArgumentException;
 
 /**
@@ -234,5 +235,137 @@ class AIPromptService
                 "[AIPromptService] 'price.current' is missing or invalid"
             );
         }
+    }
+
+    /**
+     * Build a deterministic MTF-aware prompt for AI refinement.
+     *
+     * The AI receives the deterministic preliminary_action from MTF scoring and is
+     * explicitly instructed NOT to change it. Its only job is to refine confidence
+     * and provide a short reason.
+     *
+     * @param  array{
+     *   symbol: string,
+     *   timeframe: string,
+     *   action_candidate: string,
+     *   score: int,
+     *   market_context: array{trend: string},
+     *   indicators: array{rsi: float, ema_trend: string, volume_ratio: float},
+     *   price: array{current: float},
+     * }  $mcpData  Entry-timeframe MCP payload
+     * @param  MTFResultDTO  $mtfResult  Multi-timeframe scoring result
+     * @param  string  $timeframeSummary  Human-readable summary of all timeframes
+     * @return string Fully constructed MTF prompt ready for the AI endpoint
+     *
+     * @throws InvalidArgumentException When required fields are missing
+     */
+    public function buildMtfPrompt(array $mcpData, MTFResultDTO $mtfResult, string $timeframeSummary = ''): string
+    {
+        $this->validateFields($mcpData);
+
+        $symbol = strtoupper(trim($mcpData['symbol']));
+        $entryTimeframe = trim($mcpData['timeframe']);
+        $preliminaryAction = strtoupper(trim($mtfResult->preliminaryAction));
+        $mtfScore = round($mtfResult->mtfScore, 4);
+        $baseConfidence = $mtfResult->baseConfidence;
+        $trend = strtoupper(trim($mcpData['market_context']['trend']));
+        $rsi = round((float) $mcpData['indicators']['rsi'], 2);
+        $volumeRatio = round((float) $mcpData['indicators']['volume_ratio'], 2);
+
+        return $this->renderMtfTemplate(
+            symbol: $symbol,
+            entryTimeframe: $entryTimeframe,
+            preliminaryAction: $preliminaryAction,
+            mtfScore: $mtfScore,
+            baseConfidence: $baseConfidence,
+            trend: $trend,
+            rsi: $rsi,
+            volumeRatio: $volumeRatio,
+            timeframeSummary: $timeframeSummary,
+        );
+    }
+
+    /**
+     * Render the MTF prompt template with injected values.
+     *
+     * AI role is refinement only — it MUST NOT change the preliminary_action.
+     * If preliminary_action is HOLD, action must be HOLD.
+     * If confidence < 55, action must be HOLD.
+     */
+    private function renderMtfTemplate(
+        string $symbol,
+        string $entryTimeframe,
+        string $preliminaryAction,
+        float $mtfScore,
+        int $baseConfidence,
+        string $trend,
+        float $rsi,
+        float $volumeRatio,
+        string $timeframeSummary,
+    ): string {
+        return <<<PROMPT
+        You are a crypto trading signal refinement engine.
+
+        The PRELIMINARY ACTION has been determined by a deterministic Multi-Timeframe (MTF) scoring system.
+        Your ONLY job is to refine the confidence level, assign a risk level, and provide a short reason.
+        You MUST NOT change the action from the preliminary action.
+
+        Return ONLY valid single-line JSON. No markdown, no explanation.
+
+        ---
+
+        HARD RULES (CANNOT BE BROKEN):
+
+        1. "action" MUST equal the PRELIMINARY_ACTION below — do not change it.
+        2. If PRELIMINARY_ACTION is HOLD → action MUST be HOLD.
+        3. If your computed confidence < 55 → action MUST be HOLD.
+        4. Never invent or hallucinate data.
+
+        ---
+
+        CONFIDENCE RULES:
+
+        * Use BASE_CONFIDENCE as your starting point.
+        * Adjust ±10 based on RSI and trend context.
+        * Maximum confidence: 85.
+        * If confidence < 55 → action MUST be HOLD.
+
+        ---
+
+        RISK LEVEL RULES:
+
+        * confidence 70–100 → LOW
+        * confidence 40–69 → MEDIUM
+        * confidence 0–39 → HIGH
+
+        ---
+
+        OUTPUT FORMAT (STRICT):
+        {"action":"BUY|SELL|HOLD","confidence":number,"risk_level":"LOW|MEDIUM|HIGH","reason":"short reason"}
+
+        CONSTRAINTS:
+
+        * "action" must be BUY, SELL, or HOLD
+        * "confidence" must be integer 0–100
+        * "risk_level" must be LOW, MEDIUM, or HIGH
+        * "reason" max 20 words, plain English
+        * No text outside JSON
+
+        ---
+
+        MTF INPUT:
+        Symbol: {$symbol}
+        Entry Timeframe: {$entryTimeframe}
+        PRELIMINARY_ACTION: {$preliminaryAction}
+        MTF Score: {$mtfScore}
+        Base Confidence: {$baseConfidence}
+        Timeframe Summary: {$timeframeSummary}
+
+        ENTRY TIMEFRAME CONTEXT:
+        RSI: {$rsi}
+        Trend: {$trend}
+        Volume Ratio: {$volumeRatio}
+
+        PROMPT;
     }
 }

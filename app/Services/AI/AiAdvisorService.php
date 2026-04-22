@@ -4,6 +4,7 @@ namespace App\Services\AI;
 
 use App\Models\MarketIndicator;
 use App\Services\MCP\McpResult;
+use App\Services\Trading\MTFResultDTO;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -14,6 +15,8 @@ use Illuminate\Support\Facades\Log;
  * Pipeline:
  *   1. Fetch the latest MarketIndicator for the given coin + timeframe.
  *   2. Build a structured system + user prompt from the indicator values.
+ *      When an MTFResultDTO is provided the MTF-aware prompt is used; the AI
+ *      is then instructed to refine confidence only, NOT change the action.
  *   3. Send the prompt to LM Studio via LmStudioClient.
  *   4. Pass the raw response through AiResponseParser to produce a structured decision.
  *   5. Return the decision together with the raw response and indicator snapshot.
@@ -36,9 +39,14 @@ class AiAdvisorService
      * response, the indicator snapshot used as input, and the model that was used.
      * Returns null if no indicator data is available or the AI call fails completely.
      *
+     * When $mtfResult is provided the prompt instructs the AI to refine confidence
+     * only and MUST NOT change the preliminary_action from MTF scoring.
+     *
      * @param  string  $coin  CoinGecko coin ID (e.g. 'bitcoin')
      * @param  string  $timeframe  Timeframe label (e.g. '5m', '15m', '1h')
      * @param  McpResult  $mcpResult  Structured MCP payload used to build the AI prompt
+     * @param  MTFResultDTO|null  $mtfResult  Optional MTF scoring result for refinement-only mode
+     * @param  string  $timeframeSummary  Human-readable summary of all TF signals (for MTF prompt)
      * @param  string  $executionId  Pipeline execution identifier for traceability.
      * @return array{
      *   indicator: MarketIndicator,
@@ -47,8 +55,14 @@ class AiAdvisorService
      *   model_used: string,
      * }|null
      */
-    public function advise(string $coin, string $timeframe, McpResult $mcpResult, string $executionId = ''): ?array
-    {
+    public function advise(
+        string $coin,
+        string $timeframe,
+        McpResult $mcpResult,
+        ?MTFResultDTO $mtfResult = null,
+        string $timeframeSummary = '',
+        string $executionId = '',
+    ): ?array {
         $indicator = $this->fetchLatestIndicator($coin, $timeframe);
 
         if ($indicator === null) {
@@ -61,7 +75,9 @@ class AiAdvisorService
             return null;
         }
 
-        $messages = $this->buildMessages($mcpResult);
+        $messages = $mtfResult !== null
+            ? $this->buildMtfMessages($mcpResult, $mtfResult, $timeframeSummary)
+            : $this->buildMessages($mcpResult);
 
         Log::info('[AiAdvisorService] Sending prompt to LM Studio', [
             'execution_id' => $executionId,
@@ -115,12 +131,7 @@ class AiAdvisorService
     }
 
     /**
-     * Build the LM Studio messages array from a MarketIndicator and MCP context.
-     *
-     * Returns two messages:
-     *   - system: MCP-enriched prompt built by AIPromptService (role, strategy, rules, context)
-     *   - system: static trading constraints and output format rules
-     *   - user: MCP-enriched prompt built by AIPromptService (context, indicators, decision rules)
+     * Build the LM Studio messages array from MCP context (legacy single-TF mode).
      *
      * @return array<int, array{role: string, content: string}>
      */
@@ -134,6 +145,28 @@ class AiAdvisorService
             [
                 'role' => 'user',
                 'content' => $this->promptService->buildPrompt($mcpResult->toArray()),
+            ],
+        ];
+    }
+
+    /**
+     * Build the LM Studio messages array for MTF refinement mode.
+     *
+     * The AI receives the preliminary_action from MTF scoring and is instructed to
+     * refine confidence only, not change the action.
+     *
+     * @return array<int, array{role: string, content: string}>
+     */
+    private function buildMtfMessages(McpResult $mcpResult, MTFResultDTO $mtfResult, string $timeframeSummary): array
+    {
+        return [
+            [
+                'role' => 'system',
+                'content' => 'You are a strict crypto trading signal refinement engine. Return ONLY valid JSON.',
+            ],
+            [
+                'role' => 'user',
+                'content' => $this->promptService->buildMtfPrompt($mcpResult->toArray(), $mtfResult, $timeframeSummary),
             ],
         ];
     }
