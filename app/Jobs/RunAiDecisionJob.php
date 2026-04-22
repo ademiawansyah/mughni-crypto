@@ -124,6 +124,14 @@ class RunAiDecisionJob implements ShouldQueue
 
         $startedAt = microtime(true);
 
+        Log::info('[RunAiDecisionJob] Persisting decision', [
+            'coin' => $coin,
+            'timeframe' => $timeframe,
+            'action' => $decision['action'],
+            'confidence' => $decision['confidence'],
+            'is_trade_candidate' => $isTradeCandidate,
+        ]);
+
         AiDecision::create([
             'coin' => $coin,
             'timeframe' => $timeframe,
@@ -161,12 +169,12 @@ class RunAiDecisionJob implements ShouldQueue
             ]);
         }
 
-        // Log::info('[RunAiDecisionJob] Decision persisted', [
-        //     'coin' => $coin,
-        //     'timeframe' => $timeframe,
-        //     'action' => $decision['action'],
-        //     'confidence' => $decision['confidence'],
-        // ]);
+        Log::info('[RunAiDecisionJob] Decision persisted', [
+            'coin' => $coin,
+            'timeframe' => $timeframe,
+            'action' => $decision['action'],
+            'confidence' => $decision['confidence'],
+        ]);
     }
 
     /**

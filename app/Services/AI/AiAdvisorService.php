@@ -61,11 +61,11 @@ class AiAdvisorService
 
         $messages = $this->buildMessages($mcpResult);
 
-        // Log::info('[AiAdvisorService] Sending prompt to LM Studio', [
-        //     'coin' => $coin,
-        //     'timeframe' => $timeframe,
-        //     'model' => config('ai.lm_studio.model'),
-        // ]);
+        Log::info('[AiAdvisorService] Sending prompt to LM Studio', [
+            'coin' => $coin,
+            'timeframe' => $timeframe,
+            'model' => config('ai.ollama.model'),
+        ]);
 
         $rawResponse = $this->client->chat($messages);
 
@@ -73,12 +73,12 @@ class AiAdvisorService
             ? $this->parser->parse($rawResponse)
             : $this->failsafeDecision($coin, $timeframe);
 
-        // Log::info('[AiAdvisorService] Decision produced', [
-        //     'coin' => $coin,
-        //     'timeframe' => $timeframe,
-        //     'action' => $decision['action'],
-        //     'confidence' => $decision['confidence'],
-        // ]);
+        Log::info('[AiAdvisorService] Decision produced', [
+            'coin' => $coin,
+            'timeframe' => $timeframe,
+            'action' => $decision['action'],
+            'confidence' => $decision['confidence'],
+        ]);
 
         return [
             'indicator' => $indicator,
