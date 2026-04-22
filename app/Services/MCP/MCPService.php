@@ -40,9 +40,10 @@ class MCPService
 {
     /**
      * Minimum cumulative score required to forward data to the AI service.
-     * Lowered to 3 to allow early-entry signals for micro-profit (1–2%) strategies.
+     * Set to 1 so MCP acts as a soft pre-filter; final signal quality is
+     * decided by the AI (Ollama) layer.
      */
-    private const MIN_SCORE = 3;
+    private const MIN_SCORE = 1;
 
     /**
      * RSI threshold below which a BUY candidate is identified.

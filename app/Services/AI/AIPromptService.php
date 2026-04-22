@@ -113,80 +113,53 @@ class AIPromptService
         float $price,
     ): string {
         return <<<PROMPT
-        You are a professional crypto trading advisor AI.
+        You are a strict crypto trading signal engine.
 
-        Your task is to decide whether to:
+        You must return ONLY valid JSON. No markdown, no code block, no explanation.
 
-        - BUY
-        - SELL
-        - HOLD
+        Rules:
 
-        Based ONLY on the provided structured market data below. Do not assume any information outside this context.
+        * Default action is HOLD
+        * Only return BUY or SELL if signal is strong
+        * Be conservative and avoid overtrading
+        * Output must be a single-line JSON
 
-        ================================================================
-        TRADING STRATEGY CONTEXT
-        ================================================================
+        Signal logic:
 
-        - Target profit   : 1–2% (short-term scalp)
-        - Timeframe       : {$timeframe}
-        - Prioritize high-probability, low-risk entries
-        - Avoid overtrading
-        - If signal is weak or uncertain → return HOLD
+        * RSI < 25 → potential BUY
+        * RSI > 75 → potential SELL
+        * Trend DOWN + RSI < 25 → strong BUY
+        * Trend UP + RSI > 75 → strong SELL
+        * Low volume → reduce confidence
 
-        ================================================================
-        MARKET DATA
-        ================================================================
+        Confidence rules:
 
-        Symbol            : {$symbol}
-        Market Trend      : {$trend}
+        * Strong signal → 70–85
+        * Medium → 55–70
+        * Weak → below 55 → must be HOLD
 
-        Indicators:
-          RSI             : {$rsi}
-          EMA Trend       : {$emaTrend}
-          MACD Signal     : {$macdSignal}
-          Volume Ratio    : {$volumeRatio}
+        Risk level rules:
 
-        Current Price     : {$price}
+        * confidence 70–100 → risk_level LOW
+        * confidence 40–69  → risk_level MEDIUM
+        * confidence 0–39   → risk_level HIGH
 
-        MCP Suggested Bias: {$actionCandidate}
-        MCP Score         : {$score}
+        Output format (strict):
+        {"action":"BUY|SELL|HOLD","confidence":number,"risk_level":"LOW|MEDIUM|HIGH","reason":"short reason"}
 
-        ================================================================
-        DECISION RULES
-        ================================================================
-
-        1. Follow the dominant trend direction unless a strong reversal signal is present.
-        2. RSI < 35  → potential BUY zone.
-        3. RSI > 65  → potential SELL zone.
-        4. RSI 35–65 → neutral; do not rely on RSI alone.
-        5. Volume Ratio > 1.5 confirms signal strength; < 1.0 weakens it.
-        6. A MACD crossover in the trend direction strengthens the signal.
-        7. MCP Score < 5 → be conservative; prefer HOLD over marginal BUY/SELL.
-        8. Do NOT force an action when signals are conflicting.
-
-        ================================================================
-        OUTPUT FORMAT (STRICT — DO NOT DEVIATE)
-        ================================================================
-
-        Return ONLY the following JSON object. No explanation, no markdown, no extra text.
-
-        {
-          "action": "BUY | SELL | HOLD",
-          "confidence": 0-100,
-          "reason": "short explanation",
-          "risk_level": "LOW | MEDIUM | HIGH"
-        }
-
-        ================================================================
-        CONSTRAINTS
-        ================================================================
-
+        Constraints:
         - "action"     : must be exactly one of BUY, SELL, HOLD (uppercase)
         - "confidence" : integer from 0 to 100
-        - "reason"     : maximum 20 words, plain English, no special characters
         - "risk_level" : must be exactly one of LOW, MEDIUM, HIGH (uppercase)
+        - "reason"     : maximum 20 words, plain English, no special characters
         - Do NOT include any text outside the JSON object
         - Do NOT wrap the JSON in markdown code fences
+
+        Input:
+        RSI: {$rsi}
+        Trend: {$trend}
+        Volume: {$volumeRatio}
+        Price Change 24h: N/A
         PROMPT;
     }
 

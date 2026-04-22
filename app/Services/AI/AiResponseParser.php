@@ -80,13 +80,15 @@ class AiResponseParser
     }
 
     /**
-     * Pull the assistant's text content out of the LM Studio response envelope.
+     * Pull the assistant's text content out of the Ollama response envelope.
+     *
+     * Ollama's /api/generate endpoint returns: {"response": "string", ...}
      *
      * @param  array<string, mixed>  $rawResponse
      */
     private function extractContent(array $rawResponse): ?string
     {
-        $content = $rawResponse['choices'][0]['message']['content'] ?? null;
+        $content = $rawResponse['response'] ?? null;
 
         if (! is_string($content) || trim($content) === '') {
             return null;
