@@ -39,6 +39,7 @@ class AiAdvisorService
      * @param  string  $coin  CoinGecko coin ID (e.g. 'bitcoin')
      * @param  string  $timeframe  Timeframe label (e.g. '5m', '15m', '1h')
      * @param  McpResult  $mcpResult  Structured MCP payload used to build the AI prompt
+     * @param  string  $executionId  Pipeline execution identifier for traceability.
      * @return array{
      *   indicator: MarketIndicator,
      *   decision: array{action: string, confidence: int, risk_level: string, reason: string},
@@ -46,12 +47,13 @@ class AiAdvisorService
      *   model_used: string,
      * }|null
      */
-    public function advise(string $coin, string $timeframe, McpResult $mcpResult): ?array
+    public function advise(string $coin, string $timeframe, McpResult $mcpResult, string $executionId = ''): ?array
     {
         $indicator = $this->fetchLatestIndicator($coin, $timeframe);
 
         if ($indicator === null) {
             Log::warning('[AiAdvisorService] No indicator found, skipping AI call', [
+                'execution_id' => $executionId,
                 'coin' => $coin,
                 'timeframe' => $timeframe,
             ]);
@@ -62,20 +64,30 @@ class AiAdvisorService
         $messages = $this->buildMessages($mcpResult);
 
         Log::info('[AiAdvisorService] Sending prompt to LM Studio', [
+            'execution_id' => $executionId,
             'coin' => $coin,
             'timeframe' => $timeframe,
             'model' => config('ai.ollama.model'),
+            // 'prompt' => $messages,
         ]);
 
         $rawResponse = $this->client->chat($messages);
 
+        Log::info('[AiAdvisorService] Received AI response', [
+            'execution_id' => $executionId,
+            'coin' => $coin,
+            'timeframe' => $timeframe,
+            'raw_response' => $rawResponse,
+        ]);
+
         $decision = $rawResponse !== null
             ? $this->parser->parse($rawResponse)
-            : $this->failsafeDecision($coin, $timeframe);
+            : $this->failsafeDecision($coin, $timeframe, $executionId);
 
         $decision = $this->finalizeDecision($decision, $mcpResult->score);
 
         Log::info('[AiAdvisorService] Decision produced', [
+            'execution_id' => $executionId,
             'coin' => $coin,
             'timeframe' => $timeframe,
             'action' => $decision['action'],
@@ -179,9 +191,10 @@ class AiAdvisorService
      *
      * @return array{action: string, confidence: int, risk_level: string, reason: string}
      */
-    private function failsafeDecision(string $coin, string $timeframe): array
+    private function failsafeDecision(string $coin, string $timeframe, string $executionId): array
     {
         Log::warning('[AiAdvisorService] AI call failed, defaulting to HOLD', [
+            'execution_id' => $executionId,
             'coin' => $coin,
             'timeframe' => $timeframe,
         ]);

@@ -24,6 +24,7 @@ class NotificationService
      * reason, risk_level, entry (optional), take_profit (optional), stop_loss (optional).
      *
      * @param  array{
+     *   execution_id?: string,
      *   coin: string,
      *   timeframe: string,
      *   action: string,
@@ -38,6 +39,7 @@ class NotificationService
     public function sendTradeSignal(array $payload): void
     {
         Log::channel('stack')->info('[NotificationService] Trade signal triggered', [
+            'execution_id' => $payload['execution_id'] ?? null,
             'coin' => $payload['coin'],
             'timeframe' => $payload['timeframe'],
             'action' => $payload['action'],

@@ -204,6 +204,7 @@ System MUST prevent duplicate decisions:
 
 Log EVERYTHING with `execution_id`:
 
+* Job execution start/end
 * Raw API response
 * Indicator results
 * Pre-filter evaluation

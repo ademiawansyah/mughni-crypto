@@ -7,6 +7,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
 
 /**
  * ProcessIndicatorJob
@@ -39,6 +40,7 @@ class ProcessIndicatorJob implements ShouldQueue
     public function __construct(
         private readonly array $coins,
         private readonly array $timeframes = [],
+        private readonly string $executionId = '',
     ) {}
 
     /**
@@ -51,6 +53,16 @@ class ProcessIndicatorJob implements ShouldQueue
      */
     public function handle(): void
     {
-        RunAiDecisionJob::dispatch($this->coins, $this->timeframes);
+        Log::info('[ProcessIndicatorJob] Execution started', [
+            'execution_id' => $this->executionId,
+            'coins_count' => count($this->coins),
+            'timeframes' => $this->timeframes,
+        ]);
+
+        RunAiDecisionJob::dispatch($this->coins, $this->timeframes, $this->executionId);
+
+        Log::info('[ProcessIndicatorJob] Execution completed', [
+            'execution_id' => $this->executionId,
+        ]);
     }
 }

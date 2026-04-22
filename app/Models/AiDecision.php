@@ -16,6 +16,7 @@ class AiDecision extends Model
     public $timestamps = false;
 
     protected $fillable = [
+        'execution_id',
         'coin',
         'timeframe',
         'timestamp',
@@ -26,6 +27,8 @@ class AiDecision extends Model
         'risk_level',
         'reason',
         'price_at_decision',
+        'position_size',
+        'risk_amount',
         'raw_response',
         'model_used',
         'latency_ms',
@@ -41,6 +44,8 @@ class AiDecision extends Model
             'is_trade_candidate' => 'boolean',
             'timestamp' => 'datetime',
             'price_at_decision' => 'decimal:8',
+            'position_size' => 'decimal:8',
+            'risk_amount' => 'decimal:8',
             'price_after_5m' => 'decimal:8',
             'price_after_15m' => 'decimal:8',
             'price_after_1h' => 'decimal:8',

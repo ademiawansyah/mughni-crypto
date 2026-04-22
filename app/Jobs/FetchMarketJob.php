@@ -9,6 +9,8 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 /**
  * FetchMarketJob
@@ -45,23 +47,44 @@ class FetchMarketJob implements ShouldQueue
      */
     public function handle(MarketDataService $marketDataService): void
     {
+        $executionId = (string) Str::uuid();
+
+        // Log::info('[FetchMarketJob] Execution started', [
+        //     'execution_id' => $executionId,
+        // ]);
+
         /** @var array<string> $coins */
         $coins = GeneralConfig::getCoins();
 
         /** @var array<string> $timeframes */
         $timeframes = GeneralConfig::getArray('timeframes', ['5m']);
 
-        $dueTimeframes = array_filter($timeframes, fn(string $tf) => $this->isDue($tf));
+        $dueTimeframes = array_filter($timeframes, fn (string $tf) => $this->isDue($tf));
 
         if (empty($dueTimeframes)) {
+            // Log::info('[FetchMarketJob] No due timeframe found', [
+            //     'execution_id' => $executionId,
+            // ]);
+
             return;
         }
 
         foreach ($dueTimeframes as $timeframe) {
-            $marketDataService->ingest($coins, $timeframe);
+            Log::info('[FetchMarketJob] Fetching market data', [
+                'execution_id' => $executionId,
+                'timeframe' => $timeframe,
+                'coins_count' => count($coins),
+            ]);
+            $marketDataService->ingest($coins, $timeframe, $executionId);
         }
 
-        ProcessIndicatorJob::dispatch($coins, array_values($dueTimeframes));
+        ProcessIndicatorJob::dispatch($coins, array_values($dueTimeframes), $executionId);
+
+        Log::info('[FetchMarketJob] Execution completed', [
+            'execution_id' => $executionId,
+            'coins_count' => count($coins),
+            'timeframes' => array_values($dueTimeframes),
+        ]);
     }
 
     /**

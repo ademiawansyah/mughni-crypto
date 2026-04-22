@@ -99,9 +99,10 @@ class MCPService
      *
      * @param  string  $coin  CoinGecko coin ID (e.g. 'bitcoin')
      * @param  string  $timeframe  Timeframe label (e.g. '5m', '15m')
+     * @param  string  $executionId  Pipeline execution identifier for traceability.
      * @return McpResult|null Structured payload for the AI service, or null to skip
      */
-    public function evaluate(string $coin, string $timeframe): ?McpResult
+    public function evaluate(string $coin, string $timeframe, string $executionId = ''): ?McpResult
     {
         $indicator = MarketIndicator::query()
             ->where('coin', $coin)
@@ -110,7 +111,7 @@ class MCPService
             ->first();
 
         if ($indicator === null) {
-            $this->logEvaluation($coin, $timeframe, null, null, null, 0, 'none', 'neutral', false, false, 'no_indicator_data');
+            $this->logEvaluation($coin, $timeframe, null, null, null, 0, 'none', 'neutral', false, false, 'no_indicator_data', false, 'none', $executionId);
 
             return null;
         }
@@ -121,7 +122,7 @@ class MCPService
         $ema21Raw = $indicator->ema21;
 
         if ($rsiRaw === null || $ema9Raw === null || $ema21Raw === null) {
-            $this->logEvaluation($coin, $timeframe, null, null, null, 0, 'none', 'neutral', false, false, 'missing_data');
+            $this->logEvaluation($coin, $timeframe, null, null, null, 0, 'none', 'neutral', false, false, 'missing_data', false, 'none', $executionId);
 
             return null;
         }
@@ -146,7 +147,7 @@ class MCPService
         $candidate = $this->identifyCandidate($rsi);
 
         if ($candidate === null) {
-            $this->logEvaluation($coin, $timeframe, $rsi, $trend, $volumeRatio, 0, 'none', 'neutral', false, false, 'no_signal');
+            $this->logEvaluation($coin, $timeframe, $rsi, $trend, $volumeRatio, 0, 'none', 'neutral', false, false, 'no_signal', false, 'none', $executionId);
 
             return null;
         }
@@ -158,7 +159,7 @@ class MCPService
         $score = $this->calculateScore($rsi, $trend, $candidate, $hasVolumeSpike);
 
         if ($score < self::MIN_SCORE) {
-            $this->logEvaluation($coin, $timeframe, $rsi, $trend, $volumeRatio, $score, $entryType, $signalType, false, false, 'low_score');
+            $this->logEvaluation($coin, $timeframe, $rsi, $trend, $volumeRatio, $score, $entryType, $signalType, false, false, 'low_score', false, 'none', $executionId);
 
             return null;
         }
@@ -171,7 +172,7 @@ class MCPService
             $overrideReason = $this->resolveCooldownOverride($coin, $rsi, $score, $candidate);
 
             if ($overrideReason === 'none') {
-                $this->logEvaluation($coin, $timeframe, $rsi, $trend, $volumeRatio, $score, $entryType, $signalType, true, false, 'cooldown');
+                $this->logEvaluation($coin, $timeframe, $rsi, $trend, $volumeRatio, $score, $entryType, $signalType, true, false, 'cooldown', false, 'none', $executionId);
 
                 return null;
             }
@@ -196,7 +197,7 @@ class MCPService
             currentPrice: $currentPrice,
         );
 
-        $this->logEvaluation($coin, $timeframe, $rsi, $trend, $volumeRatio, $score, $entryType, $signalType, true, true, null, $cooldownOverride, $overrideReason);
+        $this->logEvaluation($coin, $timeframe, $rsi, $trend, $volumeRatio, $score, $entryType, $signalType, true, true, null, $cooldownOverride, $overrideReason, $executionId);
 
         return $result;
     }
@@ -484,8 +485,10 @@ class MCPService
         ?string $skippedReason,
         bool $cooldownOverride = false,
         string $overrideReason = 'none',
+        string $executionId = '',
     ): void {
         Log::info('[MCPService] Evaluation', [
+            'execution_id' => $executionId,
             'symbol' => $coin,
             'timeframe' => $timeframe,
             'rsi' => $rsi,
