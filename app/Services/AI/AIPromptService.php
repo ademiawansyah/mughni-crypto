@@ -113,53 +113,82 @@ class AIPromptService
         float $price,
     ): string {
         return <<<PROMPT
-        You are a strict crypto trading signal engine.
+        You are a deterministic crypto trading signal engine.
 
-        You must return ONLY valid JSON. No markdown, no code block, no explanation.
+        You MUST strictly follow all rules below. No interpretation.
 
-        Rules:
+        Return ONLY valid single-line JSON. No markdown, no explanation.
 
-        * Default action is HOLD
-        * Only return BUY or SELL if signal is strong
-        * Be conservative and avoid overtrading
-        * Output must be a single-line JSON
+        ---
 
-        Signal logic:
+        HARD RULES (CANNOT BE BROKEN):
 
-        * RSI < 25 → potential BUY
-        * RSI > 75 → potential SELL
+        1. If RSI >= 25 AND RSI <= 75:
+        → action MUST be HOLD
+
+        2. BUY is ONLY allowed if:
+
+        * RSI < 25
+
+        3. SELL is ONLY allowed if:
+
+        * RSI > 75
+
+        4. If conditions are not met:
+        → action MUST be HOLD
+
+        ---
+
+        SIGNAL STRENGTH:
+
         * Trend DOWN + RSI < 25 → strong BUY
         * Trend UP + RSI > 75 → strong SELL
-        * Low volume → reduce confidence
 
-        Confidence rules:
+        ---
 
-        * Strong signal → 70–85
+        CONFIDENCE RULES:
+
+        * Strong → 70–85
         * Medium → 55–70
-        * Weak → below 55 → must be HOLD
+        * If confidence < 55 → action MUST be HOLD
 
-        Risk level rules:
+        ---
 
-        * confidence 70–100 → risk_level LOW
-        * confidence 40–69  → risk_level MEDIUM
-        * confidence 0–39   → risk_level HIGH
+        VOLUME RULE:
 
-        Output format (strict):
+        * If volume is null or low → reduce confidence by 10
+
+        ---
+
+        RISK LEVEL RULES:
+
+        * confidence 70–100 → LOW
+        * confidence 40–69 → MEDIUM
+        * confidence 0–39 → HIGH
+
+        ---
+
+        OUTPUT FORMAT (STRICT):
         {"action":"BUY|SELL|HOLD","confidence":number,"risk_level":"LOW|MEDIUM|HIGH","reason":"short reason"}
 
-        Constraints:
-        - "action"     : must be exactly one of BUY, SELL, HOLD (uppercase)
-        - "confidence" : integer from 0 to 100
-        - "risk_level" : must be exactly one of LOW, MEDIUM, HIGH (uppercase)
-        - "reason"     : maximum 20 words, plain English, no special characters
-        - Do NOT include any text outside the JSON object
-        - Do NOT wrap the JSON in markdown code fences
+        ---
 
-        Input:
+        CONSTRAINTS:
+
+        * "action" must be BUY, SELL, or HOLD
+        * "confidence" must be integer 0–100
+        * "risk_level" must be LOW, MEDIUM, or HIGH
+        * "reason" max 20 words, plain English
+        * No text outside JSON
+
+        ---
+
+        INPUT:
         RSI: {$rsi}
         Trend: {$trend}
         Volume: {$volumeRatio}
         Price Change 24h: N/A
+
         PROMPT;
     }
 
