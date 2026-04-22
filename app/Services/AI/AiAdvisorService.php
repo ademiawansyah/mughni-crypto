@@ -4,6 +4,10 @@ namespace App\Services\AI;
 
 use App\Models\MarketIndicator;
 use App\Services\MCP\McpResult;
+use App\Services\Trading\DTO\AiAdviceDTO;
+use App\Services\Trading\DTO\AiDecisionDTO;
+use App\Services\Trading\DTO\IndicatorDTO;
+use App\Services\Trading\DTO\MTFContextDTO;
 use App\Services\Trading\MTFResultDTO;
 use Illuminate\Support\Facades\Log;
 
@@ -267,6 +271,93 @@ class AiAdvisorService
             ],
             'raw_response' => $rawResponse,
             'model_used' => (string) config('ai.ollama.model'),
+        ];
+    }
+
+    /**
+     * Generate AI decision DTO from MTF context and entry timeframe indicators.
+     *
+     * This method wraps the legacy MTF-context pipeline to preserve behavior.
+     */
+    public function adviseFromContextDto(
+        string $coin,
+        string $entryTimeframe,
+        IndicatorDTO $entryIndicator,
+        MTFContextDTO $mtfContext,
+        McpResult $triggerMcpResult,
+        MTFResultDTO $mtfResult,
+        string $timeframeSummary,
+        string $executionId = '',
+    ): ?AiAdviceDTO {
+        $result = $this->adviseWithMtfContext(
+            coin: $coin,
+            timeframe: $entryTimeframe,
+            mcpResult: $triggerMcpResult,
+            mtfResult: $mtfResult,
+            timeframeSummary: $timeframeSummary,
+            executionId: $executionId,
+        );
+
+        if ($result === null) {
+            return null;
+        }
+
+        $decision = $result['decision'];
+
+        Log::info('[AiAdvisorService] AiDecisionDTO produced', [
+            'execution_id' => $executionId,
+            'coin' => $coin,
+            'timeframe' => $entryTimeframe,
+            'entry_rsi' => $entryIndicator->rsi,
+            'mtf_score' => $mtfContext->mtfScore,
+            'decision' => $decision,
+        ]);
+
+        return new AiAdviceDTO(
+            decision: new AiDecisionDTO(
+                action: (string) $decision['action'],
+                confidence: (int) $decision['confidence'],
+                reason: (string) $decision['reason'],
+            ),
+            rawResponse: $result['raw_response'],
+            modelUsed: (string) $result['model_used'],
+        );
+    }
+
+    /**
+     * @deprecated Use adviseFromContextDto().
+     *
+     * @return array{decision: AiDecisionDTO, raw_response: array<string, mixed>|null, model_used: string}|null
+     */
+    public function adviseFromContext(
+        string $coin,
+        string $entryTimeframe,
+        IndicatorDTO $entryIndicator,
+        MTFContextDTO $mtfContext,
+        McpResult $triggerMcpResult,
+        MTFResultDTO $mtfResult,
+        string $timeframeSummary,
+        string $executionId = '',
+    ): ?array {
+        $result = $this->adviseFromContextDto(
+            coin: $coin,
+            entryTimeframe: $entryTimeframe,
+            entryIndicator: $entryIndicator,
+            mtfContext: $mtfContext,
+            triggerMcpResult: $triggerMcpResult,
+            mtfResult: $mtfResult,
+            timeframeSummary: $timeframeSummary,
+            executionId: $executionId,
+        );
+
+        if ($result === null) {
+            return null;
+        }
+
+        return [
+            'decision' => $result->decision,
+            'raw_response' => $result->rawResponse,
+            'model_used' => $result->modelUsed,
         ];
     }
 

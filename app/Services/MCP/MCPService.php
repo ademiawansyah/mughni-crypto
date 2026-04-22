@@ -5,6 +5,8 @@ namespace App\Services\MCP;
 use App\Enums\ActionCandidate;
 use App\Enums\MarketTrend;
 use App\Models\MarketIndicator;
+use App\Services\Trading\DTO\IndicatorDTO;
+use App\Services\Trading\DTO\TimeframeSignalDTO as PipelineTimeframeSignalDTO;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
@@ -38,6 +40,9 @@ use Illuminate\Support\Facades\Log;
  */
 class MCPService
 {
+    /** @var array<string, McpResult|null> */
+    private array $lastMcpResults = [];
+
     /**
      * Minimum cumulative score required to forward data to the AI service.
      * Set to 1 so MCP acts as a soft pre-filter; final signal quality is
@@ -200,6 +205,84 @@ class MCPService
         $this->logEvaluation($coin, $timeframe, $rsi, $trend, $volumeRatio, $score, $entryType, $signalType, true, true, null, $cooldownOverride, $overrideReason, $executionId);
 
         return $result;
+    }
+
+    /**
+     * Evaluate MCP on configured timeframes and return DTO signals.
+     *
+     * @param  array<string>  $timeframes
+     * @param  array<int, IndicatorDTO>  $indicators
+     * @return array<int, PipelineTimeframeSignalDTO>
+     */
+    public function filterSignals(string $coin, array $timeframes, array $indicators, string $executionId = ''): array
+    {
+        $this->lastMcpResults = [];
+
+        $indicatorMap = [];
+
+        foreach ($indicators as $indicator) {
+            $indicatorMap[$indicator->timeframe] = $indicator;
+        }
+
+        $signals = [];
+
+        foreach ($timeframes as $timeframe) {
+            $mcpResult = $this->evaluate($coin, $timeframe, $executionId);
+            $this->lastMcpResults[$timeframe] = $mcpResult;
+
+            $indicator = $indicatorMap[$timeframe] ?? null;
+
+            $signals[] = new PipelineTimeframeSignalDTO(
+                timeframe: $timeframe,
+                rsi: $indicator?->rsi ?? 50.0,
+                trend: $this->normalizeTrendForSignal($indicator?->trend ?? 'neutral'),
+                mcpScore: $mcpResult?->score ?? 0,
+                signalType: $this->resolveSignalTypeForSignal(
+                    rsi: $indicator?->rsi ?? 50.0,
+                    trend: $this->normalizeTrendForSignal($indicator?->trend ?? 'neutral'),
+                ),
+            );
+        }
+
+        Log::info('[MCPService] DTO signals prepared', [
+            'execution_id' => $executionId,
+            'coin' => $coin,
+            'signals' => array_map(static fn (PipelineTimeframeSignalDTO $signal): array => $signal->toArray(), $signals),
+        ]);
+
+        return $signals;
+    }
+
+    /**
+     * @return array<string, McpResult|null>
+     */
+    public function lastMcpResults(): array
+    {
+        return $this->lastMcpResults;
+    }
+
+    private function normalizeTrendForSignal(string $trend): string
+    {
+        $normalized = strtoupper(trim($trend));
+
+        return match ($normalized) {
+            'UP', 'UPTREND' => 'UP',
+            'DOWN', 'DOWNTREND' => 'DOWN',
+            default => 'NEUTRAL',
+        };
+    }
+
+    private function resolveSignalTypeForSignal(float $rsi, string $trend): string
+    {
+        if ($rsi < 25.0 || $rsi > 75.0) {
+            return 'reversal';
+        }
+
+        if ($trend === 'UP' || $trend === 'DOWN') {
+            return 'trend_follow';
+        }
+
+        return 'neutral';
     }
 
     /**

@@ -2,6 +2,9 @@
 
 namespace App\Services\Trading;
 
+use App\Services\Trading\DTO\MTFContextDTO;
+use App\Services\Trading\DTO\TimeframeSignalDTO as PipelineTimeframeSignalDTO;
+
 /**
  * MTFContextService
  *
@@ -10,6 +13,34 @@ namespace App\Services\Trading;
  */
 class MTFContextService
 {
+    /**
+     * Build MTFContextDTO from deterministic MTF result output.
+     */
+    public function buildDto(MTFResultDTO $mtfResult): MTFContextDTO
+    {
+        $contextBias = $this->resolveContextBias($mtfResult->mtfScore);
+
+        $signals = [];
+
+        foreach ($mtfResult->timeframeSignals as $signal) {
+            $signals[] = new PipelineTimeframeSignalDTO(
+                timeframe: (string) $signal['timeframe'],
+                rsi: (float) $signal['rsi'],
+                trend: (string) $signal['trend'],
+                mcpScore: (int) $signal['mcp_score'],
+                signalType: (string) $signal['signal_type'],
+            );
+        }
+
+        return new MTFContextDTO(
+            mtfScore: $mtfResult->mtfScore,
+            alignment: $this->resolveAlignment($mtfResult->preliminaryAction, $contextBias),
+            bias: $contextBias,
+            timeframeSignals: $signals,
+            flags: array_values(array_unique($mtfResult->flags)),
+        );
+    }
+
     /**
      * Build soft MTF context from an MTF result.
      *

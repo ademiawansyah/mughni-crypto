@@ -3,6 +3,8 @@
 namespace App\Services\Indicator;
 
 use App\Models\MarketIndicator;
+use App\Services\Trading\DTO\CandleDTO;
+use App\Services\Trading\DTO\IndicatorDTO;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 
@@ -22,6 +24,50 @@ class IndicatorService
     private const LOAD_LIMIT = 100;
 
     private const RSI_PERIOD = 14;
+
+    /**
+     * Calculate indicators from candle DTOs grouped by timeframe.
+     *
+     * @param  array<int, CandleDTO>  $candles
+     * @param  array<string>  $timeframes
+     * @return array<int, IndicatorDTO>
+     */
+    public function calculateFromCandles(array $candles, array $timeframes): array
+    {
+        $results = [];
+
+        foreach ($timeframes as $timeframe) {
+            $timeframeCandles = array_values(array_filter(
+                $candles,
+                static fn (CandleDTO $candle): bool => $candle->timeframe === $timeframe,
+            ));
+
+            if ($timeframeCandles === []) {
+                continue;
+            }
+
+            $prices = array_map(
+                static fn (CandleDTO $candle): float => $candle->close,
+                $timeframeCandles,
+            );
+
+            $indicators = $this->calculateFromPrices($prices);
+
+            if ($indicators === null) {
+                continue;
+            }
+
+            $results[] = new IndicatorDTO(
+                timeframe: $timeframe,
+                rsi: (float) $indicators['rsi'],
+                trend: (string) $indicators['trend'],
+                volumeRatio: 0.0,
+                price: (float) $indicators['price'],
+            );
+        }
+
+        return $results;
+    }
 
     /**
      * Calculate RSI, EMA9, EMA21, trend, and latest price from a prices array.

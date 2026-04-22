@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Log;
 /**
  * ProcessIndicatorJob
  *
- * Forwards to RunAiDecisionJob after market data ingestion.
+ * Forwards to RunTradingCycleJob after market data ingestion.
  * Indicator calculation is now performed inside MarketDataService during ingest.
  */
 class ProcessIndicatorJob implements ShouldQueue
@@ -47,7 +47,7 @@ class ProcessIndicatorJob implements ShouldQueue
      * Execute the job.
      *
      * Indicators are already calculated and stored by MarketDataService during
-     * the ingest phase. This job simply forwards to RunAiDecisionJob with the
+     * the ingest phase. This job simply forwards to RunTradingCycleJob with the
      * timeframes that were actually ingested, preventing other timeframes from
      * running AI decisions prematurely.
      */
@@ -59,7 +59,7 @@ class ProcessIndicatorJob implements ShouldQueue
             'timeframes' => $this->timeframes,
         ]);
 
-        RunAiDecisionJob::dispatch($this->coins, $this->timeframes, $this->executionId);
+        RunTradingCycleJob::dispatch($this->coins, $this->timeframes, $this->executionId);
 
         Log::info('[ProcessIndicatorJob] Execution completed', [
             'execution_id' => $this->executionId,

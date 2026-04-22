@@ -2,6 +2,12 @@
 
 namespace App\Services\Trading;
 
+use App\Services\Trading\DTO\AiDecisionDTO;
+use App\Services\Trading\DTO\FinalDecisionDTO;
+use App\Services\Trading\DTO\FusionMetadataDTO;
+use App\Services\Trading\DTO\FusionOutcomeDTO;
+use App\Services\Trading\DTO\MTFContextDTO;
+
 /**
  * DecisionFusionService
  *
@@ -10,6 +16,64 @@ namespace App\Services\Trading;
  */
 class DecisionFusionService
 {
+    /**
+     * Fuse AI decision and MTF context and return decision + metadata DTOs.
+     */
+    public function fuseOutcomeDto(AiDecisionDTO $aiDecision, MTFContextDTO $mtfContext): FusionOutcomeDTO
+    {
+        $fused = $this->fuse(
+            aiDecision: [
+                'action' => $aiDecision->action,
+                'confidence' => $aiDecision->confidence,
+                'risk_level' => 'HIGH',
+                'reason' => $aiDecision->reason,
+                'flags' => [],
+            ],
+            mtfContext: [
+                'mtf_score' => $mtfContext->mtfScore,
+                'alignment' => $mtfContext->alignment,
+                'context_bias' => $mtfContext->bias,
+                'mode' => 'trend_follow',
+                'base_confidence' => 50,
+                'flags' => $mtfContext->flags,
+            ],
+        );
+
+        return new FusionOutcomeDTO(
+            decision: new FinalDecisionDTO(
+                action: (string) $fused['action'],
+                confidence: (int) $fused['confidence'],
+                riskLevel: (string) $fused['risk_level'],
+                entry: null,
+                takeProfit: null,
+                stopLoss: null,
+                positionSize: null,
+                riskAmount: null,
+                flags: is_array($fused['flags'] ?? null) ? $fused['flags'] : [],
+                mtfScore: (float) $fused['mtf_score'],
+                reason: (string) $fused['reason'],
+            ),
+            metadata: new FusionMetadataDTO(
+                aiAction: (string) $fused['ai_action'],
+                aiConfidence: (int) $fused['ai_confidence'],
+                mtfScore: (float) $fused['mtf_score'],
+                mtfAlignment: (string) $fused['mtf_alignment'],
+                contextBias: (string) $fused['context_bias'],
+                confidenceDelta: (int) $fused['confidence_delta'],
+                confidenceAdjusted: (int) $fused['confidence_adjusted'],
+                finalAction: (string) $fused['final_action'],
+            ),
+        );
+    }
+
+    /**
+     * Fuse AI decision and MTF context and return DTO output.
+     */
+    public function fuseDto(AiDecisionDTO $aiDecision, MTFContextDTO $mtfContext): FinalDecisionDTO
+    {
+        return $this->fuseOutcomeDto($aiDecision, $mtfContext)->decision;
+    }
+
     /**
      * Merge AI decision and MTF context into a fused decision payload.
      *
