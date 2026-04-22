@@ -1,4 +1,4 @@
-# AI Trading Advisor — Copilot Instructions
+# 🧠 AI Trading Advisor — Copilot Instructions (v2)
 
 ## Project Overview
 
@@ -8,212 +8,304 @@ Core responsibilities:
 
 * Fetch and store CoinGecko market data (raw and processed)
 * Calculate technical indicators (RSI, EMA)
-* Generate AI-based trading signals via LM Studio
-* Log all decisions and evaluation steps
-* Provide a dashboard using Filament
+* Apply deterministic pre-filtering (MCP layer)
+* Generate AI-based signal recommendations
+* Apply guardrails and produce final trading decisions
+* Log all steps for traceability and backtesting
+* Provide monitoring via Filament dashboard
 
 ---
 
-## Architecture Principles
+## Architecture Principles (MANDATORY)
 
-* Controllers must be thin (only orchestration)
-* All business logic must reside in Service classes under `App\Services`
-* Use Jobs for asynchronous and background processing
-* Models are strictly for data representation (no heavy logic)
+* Controllers must be thin (orchestration only)
+* All business logic must reside in `App\Services`
 * Each class must have a single responsibility
-* Code must be modular, testable, and easy to extend
+* Use Jobs for async/background processing
+* Models are for data representation only (no business logic)
+
+### Decision Authority (CRITICAL)
+
+* AI is **advisory only**
+* AI produces a **recommendation**, not a decision
+* **TradingDecisionService is the single source of truth for final decisions**
 
 ---
 
-## System Flow (MANDATORY)
+## Execution Context (MANDATORY)
 
-All implementations must follow this pipeline:
+Every pipeline execution MUST:
+
+* Generate a unique `execution_id`
+* Attach `execution_id` to:
+
+  * raw data
+  * indicator results
+  * AI prompt/response
+  * final decision
+  * logs
+
+All steps must be traceable per execution.
+
+---
+
+## System Flow (STRICT ORDER)
 
 1. Fetch market data from CoinGecko
 2. Store raw API response (unaltered)
 3. Process and calculate indicators
-4. Apply pre-filter rules (non-AI filtering)
-5. Send filtered data to AI service
-6. Validate AI response (strict format)
-7. Store decision result
-8. Trigger notifications if applicable
+4. Apply pre-filter rules (MCP layer)
+5. Send shortlisted data to AI service
+6. Validate AI response (strict schema)
+7. Apply guardrail validation (risk control)
+8. Produce final decision
+9. Store decision result
+10. Trigger notification (if eligible)
 
-Do not skip or reorder steps.
+**Do not skip, merge, or reorder steps.**
 
 ---
 
 ## Folder Structure Rules
 
-* Market logic → `App\Services\Market`
-* Indicator logic → `App\Services\Indicator`
-* AI logic → `App\Services\AI`
-* Trading decision logic → `App\Services\Trading`
-* Notification logic → `App\Services\Notification`
-* External integrations → `App\Services\External`
+* Market → `App\Services\Market`
+* Indicator → `App\Services\Indicator`
+* AI → `App\Services\AI`
+* Trading → `App\Services\Trading`
+* Notification → `App\Services\Notification`
+* External → `App\Services\External`
+* MCP → `App\Services\MCP`
 
 ---
 
 ## Service Responsibilities
 
-* MarketDataService:
+### MarketDataService
 
-  * Fetch and store market data only
+* Fetch and store raw market data only
 
-* IndicatorService:
+### IndicatorService
 
-  * Calculate indicators only
-  * Must not call external APIs
+* Calculate indicators only
+* Must NOT call external APIs
+* Must be replaceable by external service (future Python migration)
 
-* AiAdvisorService:
+### PreFilterService (MCP Layer)
 
-  * Build prompts and communicate with AI (LM Studio)
+* Apply deterministic filtering rules
+* Output must include:
 
-* TradingDecisionService:
+  * `passed` (true/false)
+  * `reason`
+  * `score` (optional)
 
-  * Combine indicator results and AI output
-  * Produce final decision
+### AiAdvisorService
 
-* NotificationService:
+* Build prompt and call AI (LM Studio / Ollama)
+* Return structured recommendation only
 
-  * Send notifications only
-  * No business logic
+### TradingDecisionService (FINAL AUTHORITY)
+
+* Combine:
+
+  * indicator data
+  * pre-filter result
+  * AI recommendation
+* Apply guardrails
+* Produce final decision:
+
+  * action
+  * confidence
+  * decision_status (accepted/rejected)
+
+### NotificationService
+
+* Send notifications only
+* No business logic
+
+---
+
+## AI Integration Rules (STRICT)
+
+AI MUST return valid JSON with EXACT structure:
+
+* `action`: BUY | SELL | HOLD
+* `confidence`: integer (0–100)
+* `type`: scalping | intraday | swing
+* `reason`: string
+
+### Validation Rules
+
+* Invalid JSON → reject
+* Missing fields → reject
+* Invalid values → reject
+
+### Fallback Behavior
+
+* If AI response is invalid:
+  → force decision to `HOLD`
+  → log error with execution_id
+
+---
+
+## Guardrail Rules (MANDATORY)
+
+Before final decision:
+
+* Reject low-confidence signals
+* Reject signals against strong trend (if defined)
+* Reject abnormal or missing data
+
+Guardrail outcome must be explicit:
+
+* `accepted` or `rejected`
+* include reason
+
+---
+
+## Pre-AI Filtering Rules (MCP)
+
+* Must be deterministic and explainable
+* Must reduce dataset before AI call
+* Must NOT rely on AI
+* If no candidates pass:
+  → skip AI
+  → produce HOLD decision
+
+---
+
+## Data Handling Rules
+
+* ALWAYS store raw CoinGecko response (unaltered JSON)
+* Store processed/indicator data separately
+* NEVER overwrite historical data
+* All decisions must be reproducible (backtesting-ready)
+
+---
+
+## Duplicate & Idempotency Rules
+
+System MUST prevent duplicate decisions:
+
+* Unique key: `symbol + timeframe + timestamp`
+* Do not re-notify or re-store identical signals
+
+---
+
+## Multi-Timeframe Support
+
+* System MUST support multiple timeframes (e.g., 5m, 15m, 1h)
+* All services must accept `timeframe` as a parameter
+* Do NOT hardcode timeframe logic
+
+---
+
+## Logging Requirements (MANDATORY)
+
+Log EVERYTHING with `execution_id`:
+
+* Raw API response
+* Indicator results
+* Pre-filter evaluation
+* AI prompt & response
+* Guardrail result
+* Final decision (including rejected)
+
+---
+
+## Notification Rules
+
+Trigger notification ONLY when:
+
+* action = BUY or SELL
+* decision_status = accepted
+* NOT duplicate
+
+---
+
+## Error Handling
+
+* External API failures must not crash system
+* AI failures must fallback safely
+* All errors must be logged with execution_id
+
+---
+
+## Performance Guidelines
+
+* Use queues for heavy processing
+* Avoid blocking HTTP requests
+* Cache when appropriate
 
 ---
 
 ## Coding Guidelines
 
 * Use constructor-based dependency injection
-* Avoid static calls unless absolutely necessary
-* Prefer small, focused, and readable methods
-* Do not mix multiple responsibilities in one class
-* Do not place business logic in controllers or jobs
-* Avoid hidden logic and implicit transformations
-* Keep all data transformations explicit and traceable
+* Avoid static calls unless necessary
+* Keep methods small and explicit
+* No hidden transformations
+* Prefer clarity over cleverness
 
 ---
 
-## Data Handling Rules
+## Code Documentation (MANDATORY)
 
-* ALWAYS store raw CoinGecko API responses as JSON without modification
-* Store processed/indicator data separately
-* Never overwrite historical data
-* Ensure all records are traceable for audit purposes
+Each class must include:
 
----
+* Clear purpose description
 
-## Pre-AI Filtering Rules
+Each public method must include:
 
-Before calling AI:
+* What it does
+* Inputs
+* Outputs
 
-* Apply basic indicator-based filtering
-* Reduce dataset size
-* Avoid unnecessary AI calls
-
-AI must only process shortlisted candidates.
+Complex logic must include reasoning comments.
 
 ---
 
-## AI Integration Rules
+## Docker / Command Rules
 
-* AI is strictly advisory (must never execute trades directly)
-* AI responses must be validated before use
-* AI output must follow a strict JSON structure
-* Invalid AI responses must be rejected and logged
+* Use Makefile for ALL commands
+* Do NOT run PHP/Composer directly on host
+* If a command fails due to host/container mismatch, do NOT retry the same failing pattern; switch immediately to Makefile wrapper commands.
+* Use `make artisan cmd="..."` for Artisan commands.
+* If Pint is unavailable via Artisan (`Command "pint" is not defined.`), use `make composer cmd="exec -- pint --dirty --format agent"`.
 
----
+Example:
 
-## Indicator Rules
-
-* Start with RSI and EMA only
-* Keep implementation simple and readable
-* Design in a way that allows migration to external Python service
-
----
-
-## Error Handling
-
-* All external API calls must handle timeouts and failures
-* AI responses must be validated (schema and required fields)
-* Invalid or failed responses must be logged
-* The system must not crash due to external failures
-
----
-
-## Logging Requirements
-
-The system MUST log:
-
-* Raw API responses
-* Indicator calculation results
-* AI prompts and responses
-* Final decisions (including rejected ones)
-
-All logs must be traceable per execution cycle.
-
----
-
-## Performance Guidelines
-
-* Use queues for heavy or long-running tasks
-* Avoid blocking HTTP requests
-* Cache frequently accessed data when appropriate
-
----
-
-## Future-Proofing
-
-* IndicatorService must support switching to an external Python service
-* Do not tightly couple business logic to Laravel-specific implementations
-* Keep architecture flexible for multi-service expansion
+* `make artisan cmd="migrate"`
+* `make artisan cmd="make:migration create_table"`
 
 ---
 
 ## What to Avoid
 
 * Fat controllers
-* Direct database queries in controllers
+* Business logic in controllers/jobs
 * Mixing raw and processed data
+* Skipping pipeline steps
 * Overengineering (keep Phase 1 simple)
 
 ---
 
-## Preferred Style
+## Copilot Behavior Rules
 
-* Use clear and explicit naming (e.g., `MarketDataService`, `AiAdvisorService`)
-* Favor readability over clever or complex code
-* Keep implementations straightforward and maintainable
-
----
-
-## Code Documentation & Comments (MANDATORY)
-
-* Every class must include a clear description of its purpose
-* Every public method must include a short explanation of:
-
-  * What it does
-  * Expected inputs
-  * Expected outputs
-* Complex logic must include inline comments explaining the reasoning
-* Avoid redundant or obvious comments; focus on intent and decision-making
-* Write code that is understandable without external explanation
+* Follow this document strictly
+* Do NOT introduce new architecture
+* Do NOT bypass system flow
+* When in doubt → choose simplicity, traceability, and explicit logic
 
 ---
 
-## Running Commands (Docker Environment)
+# 🚀 What Changed (Key Improvements)
 
-* All PHP and Artisan commands must be executed via Makefile
-* Do not run PHP or Composer directly on the host machine
-
-Example:
-
-make artisan cmd="migrate"
-make artisan cmd="make:migration create_example_table"
-
----
-
-## General Behavior for Copilot
-
-* Follow all rules in this document strictly
-* Do not introduce architecture outside these guidelines
-* When in doubt, prefer simplicity and clarity
-* Ensure generated code is consistent with the defined structure
+* Clear **decision authority** (AI vs system)
+* Added **execution_id (traceability backbone)**
+* Introduced **guardrail layer**
+* Formalized **AI contract + fallback**
+* Defined **MCP output structure**
+* Added **duplicate protection**
+* Enabled **multi-timeframe future**
+* Made system **backtesting-ready**

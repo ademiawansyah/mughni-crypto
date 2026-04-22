@@ -73,6 +73,8 @@ class AiAdvisorService
             ? $this->parser->parse($rawResponse)
             : $this->failsafeDecision($coin, $timeframe);
 
+        $decision = $this->finalizeDecision($decision, $mcpResult->score);
+
         Log::info('[AiAdvisorService] Decision produced', [
             'coin' => $coin,
             'timeframe' => $timeframe,
@@ -133,6 +135,43 @@ class AiAdvisorService
     private function buildSystemMessage(): string
     {
         return 'You are a strict crypto trading signal engine. Return ONLY valid JSON.';
+    }
+
+    /**
+     * Finalize AI decision by calibrating confidence against MCP score strength.
+     *
+     * Applies MCP-based confidence bands and weak-signal enforcement after parsing,
+     * while preserving the original response shape.
+     *
+     * @param  array{action: string, confidence: int, risk_level: string, reason: string}  $decision
+     * @return array{action: string, confidence: int, risk_level: string, reason: string}
+     */
+    private function finalizeDecision(array $decision, int $mcpScore): array
+    {
+        [$minConfidence, $maxConfidence] = $this->resolveConfidenceBand($mcpScore);
+
+        $decision['confidence'] = max($minConfidence, min($maxConfidence, (int) $decision['confidence']));
+
+        if ($mcpScore === 1 && $decision['confidence'] < 55) {
+            $decision['action'] = 'HOLD';
+        }
+
+        return $decision;
+    }
+
+    /**
+     * Resolve MCP confidence band for a given score.
+     *
+     * @return array{0: int, 1: int}
+     */
+    private function resolveConfidenceBand(int $mcpScore): array
+    {
+        return match (true) {
+            $mcpScore <= 1 => [50, 60],
+            $mcpScore === 2 => [55, 70],
+            $mcpScore === 3 => [65, 80],
+            default => [70, 85],
+        };
     }
 
     /**

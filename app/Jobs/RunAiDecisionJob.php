@@ -7,6 +7,7 @@ use App\Models\GeneralConfig;
 use App\Services\AI\AiAdvisorService;
 use App\Services\MCP\MCPService;
 use App\Services\Notification\NotificationService;
+use App\Services\Trading\DecisionGuardrailService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Queue\Queueable;
@@ -24,9 +25,10 @@ use Throwable;
  *   1. Iterate over all configured coins and timeframes.
  *   2. Run each coin through MCPService — skip the AI call if MCP returns null.
  *   3. Delegate to AiAdvisorService only for coins that pass the MCP pre-filter.
- *   4. Persist the resulting decision to the `ai_decisions` table.
- *   5. Continue processing remaining coins if one fails — never crash the whole job.
- *   6. Default to a HOLD decision if the AI service is unavailable.
+ *   4. Apply deterministic guardrails to the calibrated AI decision.
+ *   5. Persist the resulting decision to the `ai_decisions` table.
+ *   6. Continue processing remaining coins if one fails — never crash the whole job.
+ *   7. Default to a HOLD decision if the AI service is unavailable.
  *
  * No business logic lives here. All market/AI logic is in the service layer.
  */
@@ -62,15 +64,19 @@ class RunAiDecisionJob implements ShouldQueue
      * Errors for individual coins are caught, logged, and skipped so remaining coins
      * are always processed.
      */
-    public function handle(AiAdvisorService $advisorService, NotificationService $notificationService, MCPService $mcpService): void
-    {
+    public function handle(
+        AiAdvisorService $advisorService,
+        NotificationService $notificationService,
+        MCPService $mcpService,
+        DecisionGuardrailService $guardrailService,
+    ): void {
         $coins = $this->resolveCoins();
         $timeframes = $this->resolveTimeframes();
 
         foreach ($coins as $coin) {
             foreach ($timeframes as $timeframe) {
                 try {
-                    $this->processOne($advisorService, $notificationService, $mcpService, $coin, $timeframe);
+                    $this->processOne($advisorService, $notificationService, $mcpService, $guardrailService, $coin, $timeframe);
                 } catch (Throwable $e) {
                     Log::error('[RunAiDecisionJob] Unexpected failure — skipping coin', [
                         'coin' => $coin,
@@ -94,6 +100,7 @@ class RunAiDecisionJob implements ShouldQueue
         AiAdvisorService $advisorService,
         NotificationService $notificationService,
         MCPService $mcpService,
+        DecisionGuardrailService $guardrailService,
         string $coin,
         string $timeframe
     ): void {
@@ -117,6 +124,12 @@ class RunAiDecisionJob implements ShouldQueue
 
         $indicator = $result['indicator'];
         $decision = $result['decision'];
+
+        $decision = $guardrailService->apply(
+            $decision,
+            (float) $indicator->rsi,
+            (string) $indicator->trend,
+        );
 
         // A trade candidate is a high-confidence BUY or SELL — the only signals worth acting on.
         $isTradeCandidate = in_array($decision['action'], ['BUY', 'SELL'])
