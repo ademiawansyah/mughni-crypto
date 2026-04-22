@@ -9,6 +9,5 @@ Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
 
-// FetchMarketJob runs every minute and decides internally which timeframes
-// are due based on GeneralConfig. This avoids any DB query at scheduler boot.
-Schedule::job(new FetchMarketJob)->everyMinute()->withoutOverlapping();
+// MTF pipeline runs every 5 minutes and derives 15m/30m/60m from one 5m base dataset.
+Schedule::job(new FetchMarketJob)->everyFiveMinutes()->withoutOverlapping();

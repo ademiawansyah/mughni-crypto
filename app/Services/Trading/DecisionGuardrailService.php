@@ -5,66 +5,103 @@ namespace App\Services\Trading;
 /**
  * DecisionGuardrailService
  *
- * Applies deterministic post-AI trading guardrails before persistence and
- * notifications. This service does not call external APIs and does not mutate
- * the decision DTO shape.
+ * Applies safety-net validation after decision fusion and before persistence.
+ * This service is intentionally conservative and only blocks critical issues.
  *
  * Rules (applied in order):
- *   Rule 1 — MTF enforcement: if action differs from preliminary_action, revert it.
- *   Rule 2 — RSI enforcement: BUY blocked when RSI >= 25, SELL when RSI <= 75.
- *   Rule 3 — Confidence enforcement: action forced to HOLD when confidence < 55.
- *   Rule 4 — Strong SELL override: RSI > 80 + UP trend → forced SELL, confidence ≥ 75.
+ *   Rule 1 — Invalid payload hard block.
+ *   Rule 2 — Missing/abnormal market data hard block.
+ *   Rule 3 — Low confidence hard block.
+ *
+ * No strategic override is performed. BUY/SELL remains AI-owned unless one of
+ * the critical safety violations above is detected.
  */
 class DecisionGuardrailService
 {
+    private const MIN_CONFIDENCE = 55;
+
     /**
-     * Apply all guardrails to one decision.
+     * Apply guardrail checks to one fused decision.
      *
-     * Pass $mtfResult to enable Rule 1 (MTF enforcement). When null, Rule 1 is skipped
-     * and the service behaves identically to the pre-MTF version.
-     *
-     * @param  array{action: string, confidence: int, risk_level: string, reason: string}  $decision
+     * @param  array{action: string, confidence: int, risk_level: string, reason: string, flags?: array<int, string>}  $decision
      * @param  float  $rsi  Latest RSI value
      * @param  string  $trend  Market trend label, expected values: UP|DOWN|SIDEWAYS
-     * @param  MTFResultDTO|null  $mtfResult  Optional MTF result for preliminary_action enforcement
-     * @return array{action: string, confidence: int, risk_level: string, reason: string}
+     * @return array{action: string, confidence: int, risk_level: string, reason: string, flags: array<int, string>}
      */
-    public function apply(array $decision, float $rsi, string $trend, ?MTFResultDTO $mtfResult = null): array
+    public function apply(array $decision, float $rsi, string $trend): array
     {
-        // Rule 1 — MTF enforcement: AI must not override the preliminary action.
-        if ($mtfResult !== null) {
-            $preliminaryAction = strtoupper($mtfResult->preliminaryAction);
-            $currentAction = strtoupper((string) $decision['action']);
-
-            if ($currentAction !== $preliminaryAction) {
-                $decision['action'] = $preliminaryAction;
-                $decision['reason'] = trim($decision['reason']).' | mtf_enforced';
-            }
-        }
-
+        $decision['flags'] = $this->normalizeFlags($decision['flags'] ?? []);
         $action = strtoupper((string) $decision['action']);
+        $confidence = (int) $decision['confidence'];
 
-        // Rule 2 — RSI enforcement.
-        if ($action === 'BUY' && $rsi >= 25.0) {
+        // Rule 1 — Invalid payload hard block.
+        if (! in_array($action, ['BUY', 'SELL', 'HOLD'], true)) {
             $decision['action'] = 'HOLD';
+            $decision['confidence'] = 0;
+            $decision['risk_level'] = 'HIGH';
+            $decision['reason'] = trim((string) $decision['reason']) . ' | guardrail:invalid_action';
+            $decision['flags'][] = 'guardrail_invalid_action';
+
+            return $this->finalize($decision);
         }
 
-        if ($action === 'SELL' && $rsi <= 75.0) {
+        // Rule 2 — Missing/abnormal market data hard block.
+        if (! is_finite($rsi) || $rsi <= 0.0 || $rsi >= 100.0 || trim($trend) === '') {
             $decision['action'] = 'HOLD';
+            $decision['confidence'] = 0;
+            $decision['risk_level'] = 'HIGH';
+            $decision['reason'] = trim((string) $decision['reason']) . ' | guardrail:invalid_market_data';
+            $decision['flags'][] = 'guardrail_invalid_market_data';
+
+            return $this->finalize($decision);
         }
 
-        // Rule 3 — Confidence enforcement.
-        if ((int) $decision['confidence'] < 55) {
+        // Rule 3 — Low confidence hard block.
+        if ($action !== 'HOLD' && $confidence < self::MIN_CONFIDENCE) {
             $decision['action'] = 'HOLD';
+            $decision['reason'] = trim((string) $decision['reason']) . ' | guardrail:low_confidence';
+            $decision['flags'][] = 'guardrail_low_confidence';
         }
 
-        // Rule 4 — Strong SELL override (re-read action after earlier rules may have changed it).
-        if ($rsi > 80.0 && strtoupper(trim($trend)) === 'UP') {
-            $decision['action'] = 'SELL';
-            $decision['confidence'] = max((int) $decision['confidence'], 75);
-            $decision['reason'] = 'overbought reversal | overridden';
-        }
+        return $this->finalize($decision);
+    }
+
+    /**
+     * @param  array{action: string, confidence: int, risk_level: string, reason: string, flags: array<int, string>}  $decision
+     * @return array{action: string, confidence: int, risk_level: string, reason: string, flags: array<int, string>}
+     */
+    private function finalize(array $decision): array
+    {
+        $decision['flags'] = $this->normalizeFlags($decision['flags']);
 
         return $decision;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function normalizeFlags(mixed $flags): array
+    {
+        if (! is_array($flags)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($flags as $flag) {
+            if (! is_string($flag)) {
+                continue;
+            }
+
+            $trimmed = trim($flag);
+
+            if ($trimmed === '') {
+                continue;
+            }
+
+            $normalized[] = $trimmed;
+        }
+
+        return array_values(array_unique($normalized));
     }
 }

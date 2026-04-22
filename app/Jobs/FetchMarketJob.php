@@ -15,9 +15,10 @@ use Illuminate\Support\Str;
 /**
  * FetchMarketJob
  *
- * Queued job that runs every minute and determines which timeframes are due
- * based on the current time and the configured timeframes in GeneralConfig.
- * Only timeframes whose interval aligns with the current minute are processed.
+ * Queued job that runs every 5 minutes and triggers one MTF ingestion cycle.
+ *
+ * Data is fetched once per coin (days=1) and then derived into configured
+ * dynamic timeframes inside MarketDataService.
  *
  * No business logic lives here — all logic is delegated to MarketDataService.
  */
@@ -42,80 +43,68 @@ class FetchMarketJob implements ShouldQueue
     /**
      * Execute the job.
      *
-     * Reads configured timeframes and coins from GeneralConfig, then processes
-     * only the timeframes whose interval aligns with the current minute.
+     * Runs one complete MTF pipeline cycle and dispatches downstream jobs.
      */
     public function handle(MarketDataService $marketDataService): void
     {
         $executionId = (string) Str::uuid();
 
-        // Log::info('[FetchMarketJob] Execution started', [
-        //     'execution_id' => $executionId,
-        // ]);
+        Log::info('[FetchMarketJob] Execution started', [
+            'execution_id' => $executionId,
+        ]);
 
         /** @var array<string> $coins */
         $coins = GeneralConfig::getCoins();
+        $timeframes = $this->resolveSortedTimeframes();
 
-        /** @var array<string> $timeframes */
-        $timeframes = GeneralConfig::getArray('timeframes', ['5m']);
-
-        $dueTimeframes = array_filter($timeframes, fn (string $tf) => $this->isDue($tf));
-
-        if (empty($dueTimeframes)) {
-            // Log::info('[FetchMarketJob] No due timeframe found', [
-            //     'execution_id' => $executionId,
-            // ]);
+        if ($timeframes === []) {
+            Log::warning('[FetchMarketJob] No valid timeframe configured, skipping execution', [
+                'execution_id' => $executionId,
+            ]);
 
             return;
         }
 
-        foreach ($dueTimeframes as $timeframe) {
-            Log::info('[FetchMarketJob] Fetching market data', [
-                'execution_id' => $executionId,
-                'timeframe' => $timeframe,
-                'coins_count' => count($coins),
-            ]);
-            $marketDataService->ingest($coins, $timeframe, $executionId);
-        }
+        Log::info('[FetchMarketJob] Fetching MTF market data', [
+            'execution_id' => $executionId,
+            'timeframes' => $timeframes,
+            'coins_count' => count($coins),
+        ]);
 
-        ProcessIndicatorJob::dispatch($coins, array_values($dueTimeframes), $executionId);
+        $marketDataService->ingest($coins, $timeframes, $executionId);
+
+        ProcessIndicatorJob::dispatch($coins, $timeframes, $executionId);
 
         Log::info('[FetchMarketJob] Execution completed', [
             'execution_id' => $executionId,
             'coins_count' => count($coins),
-            'timeframes' => array_values($dueTimeframes),
+            'timeframes' => $timeframes,
         ]);
     }
 
     /**
-     * Determine whether a given timeframe is due at the current minute.
-     *
-     * Examples:
-     *   '1m'  → always true
-     *   '5m'  → true when minute % 5 === 0
-     *   '1h'  → true when minute === 0
-     *   '2h'  → true when minute === 0 and hour % 2 === 0
-     *
-     * @param  string  $timeframe  Timeframe string (e.g. '5m', '1h').
+     * @return array<string>
      */
-    private function isDue(string $timeframe): bool
+    private function resolveSortedTimeframes(): array
     {
-        $now = now();
-        $minute = (int) $now->format('i');
-        $hour = (int) $now->format('G');
+        $timeframes = GeneralConfig::getTimeframes();
+        $unique = array_values(array_unique($timeframes));
 
-        if (preg_match('/^(\d+)m$/', $timeframe, $matches)) {
-            $interval = (int) $matches[1];
+        usort($unique, fn (string $a, string $b): int => $this->timeframeToMinutes($a) <=> $this->timeframeToMinutes($b));
 
-            return $interval === 1 || $minute % $interval === 0;
+        return array_values(array_filter($unique, fn (string $timeframe): bool => $this->timeframeToMinutes($timeframe) !== PHP_INT_MAX));
+    }
+
+    private function timeframeToMinutes(string $timeframe): int
+    {
+        if (preg_match('/^(\d+)m$/i', trim($timeframe), $matches) === 1) {
+            return (int) $matches[1];
         }
 
-        if (preg_match('/^(\d+)h$/', $timeframe, $matches)) {
-            $interval = (int) $matches[1];
-
-            return $minute === 0 && ($interval === 1 || $hour % $interval === 0);
+        if (preg_match('/^(\d+)h$/i', trim($timeframe), $matches) === 1) {
+            return ((int) $matches[1]) * 60;
         }
 
-        return false;
+        return PHP_INT_MAX;
     }
 }

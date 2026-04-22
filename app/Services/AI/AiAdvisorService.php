@@ -119,6 +119,158 @@ class AiAdvisorService
     }
 
     /**
+     * Generate an AI trading decision while including MTF context as advisory input.
+     *
+     * Unlike refinement mode, this path allows AI to decide action freely.
+     * MTF context is provided for reasoning, while final confidence shaping happens
+     * downstream in DecisionFusionService.
+     *
+     * @return array{
+     *   indicator: MarketIndicator,
+     *   decision: array{action: string, confidence: int, risk_level: string, reason: string},
+     *   raw_response: array<string, mixed>|null,
+     *   model_used: string,
+     * }|null
+     */
+    public function adviseWithMtfContext(
+        string $coin,
+        string $timeframe,
+        McpResult $mcpResult,
+        MTFResultDTO $mtfResult,
+        string $timeframeSummary,
+        string $executionId = '',
+    ): ?array {
+        $indicator = $this->fetchLatestIndicator($coin, $timeframe);
+
+        if ($indicator === null) {
+            Log::warning('[AiAdvisorService] No indicator found, skipping AI call', [
+                'execution_id' => $executionId,
+                'coin' => $coin,
+                'timeframe' => $timeframe,
+            ]);
+
+            return null;
+        }
+
+        $messages = $this->buildMtfContextMessages($mcpResult, $mtfResult, $timeframeSummary);
+
+        Log::info('[AiAdvisorService] Sending MTF-context prompt to LM Studio', [
+            'execution_id' => $executionId,
+            'coin' => $coin,
+            'timeframe' => $timeframe,
+            'model' => config('ai.ollama.model'),
+            'mtf_score' => $mtfResult->mtfScore,
+            'mode' => $mtfResult->mode,
+        ]);
+
+        $rawResponse = $this->client->chat($messages);
+
+        Log::info('[AiAdvisorService] Received AI response', [
+            'execution_id' => $executionId,
+            'coin' => $coin,
+            'timeframe' => $timeframe,
+            'raw_response' => $rawResponse,
+        ]);
+
+        $decision = $rawResponse !== null
+            ? $this->parser->parse($rawResponse)
+            : $this->failsafeDecision($coin, $timeframe, $executionId);
+
+        $decision = $this->finalizeDecision($decision, $mcpResult->score);
+
+        Log::info('[AiAdvisorService] MTF-context AI decision produced', [
+            'execution_id' => $executionId,
+            'coin' => $coin,
+            'timeframe' => $timeframe,
+            'action' => $decision['action'],
+            'confidence' => $decision['confidence'],
+        ]);
+
+        return [
+            'indicator' => $indicator,
+            'decision' => $decision,
+            'raw_response' => $rawResponse,
+            'model_used' => (string) config('ai.ollama.model'),
+        ];
+    }
+
+    /**
+     * Refine a deterministic MTF preliminary decision using AI.
+     *
+     * AI is advisory-only here: it can only adjust confidence and reason.
+     * Action is always enforced to preliminary_action.
+     *
+     * @return array{
+     *   decision: array{action: string, confidence: int, risk_level: string, reason: string, flags: array<int, string>},
+     *   raw_response: array<string, mixed>|null,
+     *   model_used: string,
+     * }|null
+     */
+    public function refineMtfDecision(
+        string $coin,
+        MTFResultDTO $mtfResult,
+        string $timeframeSummary,
+        float $rsi5m,
+        string $trend5m,
+        string $executionId = '',
+    ): ?array {
+        $messages = [
+            [
+                'role' => 'system',
+                'content' => 'You are a strict crypto trading confidence refinement engine. Return ONLY valid JSON.',
+            ],
+            [
+                'role' => 'user',
+                'content' => $this->promptService->buildMtfRefinementPrompt(
+                    mtfResult: $mtfResult,
+                    timeframeSummary: $timeframeSummary,
+                    rsi5m: $rsi5m,
+                    trend5m: $trend5m,
+                ),
+            ],
+        ];
+
+        Log::info('[AiAdvisorService] Sending MTF refinement prompt', [
+            'execution_id' => $executionId,
+            'coin' => $coin,
+            'model' => config('ai.ollama.model'),
+            'preliminary_action' => $mtfResult->preliminaryAction,
+            'mtf_score' => $mtfResult->mtfScore,
+        ]);
+
+        $rawResponse = $this->client->chat($messages);
+
+        $parsed = $rawResponse !== null
+            ? $this->parser->parse($rawResponse)
+            : [
+                'action' => $mtfResult->preliminaryAction,
+                'confidence' => $mtfResult->baseConfidence,
+                'risk_level' => $this->resolveRiskLevel($mtfResult->baseConfidence),
+                'reason' => 'AI service unavailable',
+            ];
+
+        $parsed['action'] = $mtfResult->preliminaryAction;
+
+        $minConfidence = max(0, $mtfResult->baseConfidence - 10);
+        $maxConfidence = min(85, $mtfResult->baseConfidence + 10);
+        $parsed['confidence'] = max($minConfidence, min($maxConfidence, (int) $parsed['confidence']));
+        $parsed['risk_level'] = $this->resolveRiskLevel((int) $parsed['confidence']);
+        $parsed['flags'] = $mtfResult->flags;
+
+        return [
+            'decision' => [
+                'action' => (string) $parsed['action'],
+                'confidence' => (int) $parsed['confidence'],
+                'risk_level' => (string) $parsed['risk_level'],
+                'reason' => (string) $parsed['reason'],
+                'flags' => (array) $parsed['flags'],
+            ],
+            'raw_response' => $rawResponse,
+            'model_used' => (string) config('ai.ollama.model'),
+        ];
+    }
+
+    /**
      * Retrieve the most recent MarketIndicator row for the given coin and timeframe.
      */
     private function fetchLatestIndicator(string $coin, string $timeframe): ?MarketIndicator
@@ -172,6 +324,25 @@ class AiAdvisorService
     }
 
     /**
+     * Build LM Studio messages where MTF is contextual, not authoritative.
+     *
+     * @return array<int, array{role: string, content: string}>
+     */
+    private function buildMtfContextMessages(McpResult $mcpResult, MTFResultDTO $mtfResult, string $timeframeSummary): array
+    {
+        return [
+            [
+                'role' => 'system',
+                'content' => 'You are a strict crypto trading signal engine. Return ONLY valid JSON.',
+            ],
+            [
+                'role' => 'user',
+                'content' => $this->promptService->buildMtfContextPrompt($mcpResult->toArray(), $mtfResult, $timeframeSummary),
+            ],
+        ];
+    }
+
+    /**
      * Return a minimal system-level role declaration.
      *
      * Full trading rules and output format are embedded directly in the user prompt
@@ -197,10 +368,6 @@ class AiAdvisorService
 
         $decision['confidence'] = max($minConfidence, min($maxConfidence, (int) $decision['confidence']));
 
-        if ($mcpScore === 1 && $decision['confidence'] < 55) {
-            $decision['action'] = 'HOLD';
-        }
-
         return $decision;
     }
 
@@ -212,10 +379,10 @@ class AiAdvisorService
     private function resolveConfidenceBand(int $mcpScore): array
     {
         return match (true) {
-            $mcpScore <= 1 => [50, 60],
-            $mcpScore === 2 => [55, 70],
-            $mcpScore === 3 => [65, 80],
-            default => [70, 85],
+            $mcpScore <= 1 => [45, 80],
+            $mcpScore === 2 => [50, 85],
+            $mcpScore === 3 => [55, 90],
+            default => [60, 95],
         };
     }
 
@@ -238,5 +405,18 @@ class AiAdvisorService
             'risk_level' => 'HIGH',
             'reason' => 'AI service unavailable',
         ];
+    }
+
+    private function resolveRiskLevel(int $confidence): string
+    {
+        if ($confidence >= 70) {
+            return 'LOW';
+        }
+
+        if ($confidence >= 40) {
+            return 'MEDIUM';
+        }
+
+        return 'HIGH';
     }
 }

@@ -80,6 +80,15 @@ class MTFScoringService
             mtfScore: $mtfScore,
             preliminaryAction: $preliminaryAction,
             baseConfidence: $baseConfidence,
+            mode: 'trend_follow',
+            flags: [],
+            timeframeSignals: $this->buildSignalSnapshots($results),
+            roleTimeframes: [
+                'trigger' => '5m',
+                'setup' => '15m',
+                'context' => '30m',
+                'direction' => '60m',
+            ],
         );
     }
 
@@ -201,5 +210,38 @@ class MTFScoringService
     private function deriveBaseConfidence(float $mtfScore): int
     {
         return (int) min(85, 50 + (abs($mtfScore) * 10));
+    }
+
+    /**
+     * @param  array<string, McpResult|null>  $results
+     * @return array<string, array{timeframe: string, rsi: float, trend: string, mcp_score: int, signal_type: string}>
+     */
+    private function buildSignalSnapshots(array $results): array
+    {
+        $snapshots = [];
+
+        foreach ($results as $timeframe => $mcpResult) {
+            if ($mcpResult === null) {
+                $snapshots[$timeframe] = [
+                    'timeframe' => $timeframe,
+                    'rsi' => 50.0,
+                    'trend' => 'NEUTRAL',
+                    'mcp_score' => 0,
+                    'signal_type' => 'neutral',
+                ];
+
+                continue;
+            }
+
+            $snapshots[$timeframe] = [
+                'timeframe' => $timeframe,
+                'rsi' => $mcpResult->rsi,
+                'trend' => $mcpResult->trend->value,
+                'mcp_score' => $mcpResult->score,
+                'signal_type' => $this->deriveSignalType($mcpResult),
+            ];
+        }
+
+        return $snapshots;
     }
 }

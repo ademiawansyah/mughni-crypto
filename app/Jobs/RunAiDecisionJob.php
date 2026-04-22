@@ -4,12 +4,16 @@ namespace App\Jobs;
 
 use App\Models\AiDecision;
 use App\Models\GeneralConfig;
+use App\Models\MarketIndicator;
 use App\Services\AI\AiAdvisorService;
 use App\Services\MCP\McpResult;
 use App\Services\MCP\MCPService;
 use App\Services\Notification\NotificationService;
+use App\Services\Trading\DecisionFusionService;
 use App\Services\Trading\DecisionGuardrailService;
-use App\Services\Trading\MTFScoringService;
+use App\Services\Trading\FinalSignalDTO;
+use App\Services\Trading\MTFContextService;
+use App\Services\Trading\MTFDecisionService;
 use App\Services\Trading\PositionSizingService;
 use App\Services\Trading\TradeLevelService;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -23,19 +27,14 @@ use Throwable;
 /**
  * RunAiDecisionJob
  *
- * Queued job that drives one full AI decision cycle for every configured coin.
- *
- * Pipeline (MTF-aware):
- *   1. For each coin, evaluate ALL configured timeframes through MCPService.
- *   2. Feed all per-timeframe McpResults into MTFScoringService to derive a
- *      deterministic preliminary_action and mtf_score.
- *   3. If preliminary_action is HOLD (or no timeframe passed MCP), skip AI.
- *   4. Determine the entry timeframe (finest-grained TF that passed MCP).
- *   5. Call AiAdvisorService in MTF-refinement mode — AI refines confidence only.
- *   6. Apply DecisionGuardrailService (includes MTF enforcement as Rule 1).
- *   7. Persist the final decision and trigger notification if eligible.
- *
- * No business logic lives here. All market/AI/guardrail logic is in the service layer.
+ * Queued job that executes the post-ingestion decision pipeline for each coin:
+ * 1. MCP pre-filter per timeframe (unchanged MCP logic).
+ * 2. Deterministic MTF context scoring.
+ * 3. AI raw decision generation (AI always runs when MCP trigger passes).
+ * 4. Decision fusion (MTF confidence modulation only).
+ * 5. Guardrail safety validation.
+ * 6. Trade levels + position sizing.
+ * 7. Persist + notify with idempotency checks.
  */
 class RunAiDecisionJob implements ShouldQueue
 {
@@ -65,19 +64,17 @@ class RunAiDecisionJob implements ShouldQueue
 
     /**
      * Execute the job.
-     *
-     * For each coin, collects MCP results across all timeframes, runs MTF scoring,
-     * and delegates to the AI + guardrail pipeline when a non-HOLD signal is found.
-     * Errors for individual coins are caught and logged so remaining coins always run.
      */
     public function handle(
         AiAdvisorService $advisorService,
         NotificationService $notificationService,
         MCPService $mcpService,
         DecisionGuardrailService $guardrailService,
+        DecisionFusionService $decisionFusionService,
+        MTFContextService $mtfContextService,
         TradeLevelService $tradeLevelService,
         PositionSizingService $positionSizingService,
-        MTFScoringService $mtfScoringService,
+        MTFDecisionService $mtfDecisionService,
     ): void {
         Log::info('[RunAiDecisionJob] Execution started', [
             'execution_id' => $this->executionId,
@@ -89,15 +86,17 @@ class RunAiDecisionJob implements ShouldQueue
         foreach ($coins as $coin) {
             try {
                 $this->processCoin(
-                    $advisorService,
-                    $notificationService,
-                    $mcpService,
-                    $guardrailService,
-                    $tradeLevelService,
-                    $positionSizingService,
-                    $mtfScoringService,
-                    $coin,
-                    $timeframes,
+                    advisorService: $advisorService,
+                    notificationService: $notificationService,
+                    mcpService: $mcpService,
+                    guardrailService: $guardrailService,
+                    decisionFusionService: $decisionFusionService,
+                    mtfContextService: $mtfContextService,
+                    tradeLevelService: $tradeLevelService,
+                    positionSizingService: $positionSizingService,
+                    mtfDecisionService: $mtfDecisionService,
+                    coin: $coin,
+                    timeframes: $timeframes,
                 );
             } catch (Throwable $e) {
                 Log::error('[RunAiDecisionJob] Unexpected failure — skipping coin', [
@@ -115,16 +114,7 @@ class RunAiDecisionJob implements ShouldQueue
     }
 
     /**
-     * Process one coin using multi-timeframe consensus.
-     *
-     * Steps:
-     *   1. Collect McpResult for every timeframe (null when MCP rejects it).
-     *   2. Run MTFScoringService to derive preliminary_action + mtf_score.
-     *   3. Skip when preliminary_action = HOLD or no TF passed MCP.
-     *   4. Resolve entry timeframe (finest-grained passing TF).
-     *   5. Call AI in MTF-refinement mode (AI refines confidence, not action).
-     *   6. Apply guardrails (MTF enforcement is Rule 1 inside guardrail).
-     *   7. Persist + notify.
+     * Process one coin through MCP -> MTF -> optional AI -> guardrail -> persist flow.
      *
      * @param  array<string>  $timeframes
      */
@@ -133,13 +123,14 @@ class RunAiDecisionJob implements ShouldQueue
         NotificationService $notificationService,
         MCPService $mcpService,
         DecisionGuardrailService $guardrailService,
+        DecisionFusionService $decisionFusionService,
+        MTFContextService $mtfContextService,
         TradeLevelService $tradeLevelService,
         PositionSizingService $positionSizingService,
-        MTFScoringService $mtfScoringService,
+        MTFDecisionService $mtfDecisionService,
         string $coin,
         array $timeframes,
     ): void {
-        // --- Step 1: Collect per-timeframe MCP results ---
         /** @var array<string, McpResult|null> $mcpResults */
         $mcpResults = [];
 
@@ -147,192 +138,192 @@ class RunAiDecisionJob implements ShouldQueue
             $mcpResults[$timeframe] = $mcpService->evaluate($coin, $timeframe, $this->executionId);
         }
 
-        // --- Step 2: MTF scoring ---
-        $mtfResult = $mtfScoringService->score($mcpResults, $this->executionId);
-        $timeframeSummary = $mtfScoringService->buildTimeframeSummary($mcpResults);
+        $mtfResult = $mtfDecisionService->evaluate($coin, $mcpResults, $timeframes, $this->executionId);
+        $mtfContext = $mtfContextService->build($mtfResult);
+        $timeframeSummary = $mtfDecisionService->buildTimeframeSummary($mtfResult->timeframeSignals);
 
-        // --- Step 3: Gate — skip when HOLD or no TF passed ---
-        $passedResults = array_filter($mcpResults, fn(?McpResult $r) => $r !== null);
+        $triggerTimeframe = $mtfResult->roleTimeframes['trigger'];
+        $triggerMcpResult = $mcpResults[$triggerTimeframe] ?? null;
 
-        if (empty($passedResults) || $mtfResult->preliminaryAction === 'HOLD') {
-            Log::info('[RunAiDecisionJob] MTF preliminary action is HOLD — skipping AI', [
+        if ($triggerMcpResult === null) {
+            Log::info('[RunAiDecisionJob] AI skipped because trigger MCP did not pass', [
                 'execution_id' => $this->executionId,
                 'coin' => $coin,
-                'mtf_score' => $mtfResult->mtfScore,
-                'preliminary_action' => $mtfResult->preliminaryAction,
-                'passed_timeframes' => array_keys($passedResults),
+                'trigger_timeframe' => $triggerTimeframe,
             ]);
 
             return;
         }
 
-        // --- Step 4: Resolve entry timeframe (finest-grained TF that passed MCP) ---
-        $entryTimeframe = $this->resolveEntryTimeframe($passedResults, $timeframes);
-        $entryMcpResult = $passedResults[$entryTimeframe];
+        $triggerIndicator = $this->fetchLatestIndicator($coin, $triggerTimeframe);
 
-        // --- Step 5: AI call (refinement mode) ---
-        $result = $advisorService->advise(
+        if ($triggerIndicator === null) {
+            Log::warning('[RunAiDecisionJob] Missing 5m indicator — skipping coin', [
+                'execution_id' => $this->executionId,
+                'coin' => $coin,
+                'trigger_timeframe' => $triggerTimeframe,
+            ]);
+
+            return;
+        }
+
+        $aiResult = $advisorService->adviseWithMtfContext(
             coin: $coin,
-            timeframe: $entryTimeframe,
-            mcpResult: $entryMcpResult,
+            timeframe: $triggerTimeframe,
+            mcpResult: $triggerMcpResult,
             mtfResult: $mtfResult,
             timeframeSummary: $timeframeSummary,
             executionId: $this->executionId,
         );
 
-        if ($result === null) {
-            Log::info('[RunAiDecisionJob] No indicator data — skipping persistence', [
-                'execution_id' => $this->executionId,
-                'coin' => $coin,
-                'timeframe' => $entryTimeframe,
-            ]);
+        $aiDecision = $aiResult['decision'] ?? [
+            'action' => 'HOLD',
+            'confidence' => 0,
+            'risk_level' => 'HIGH',
+            'reason' => 'AI decision unavailable',
+            'flags' => ['ai_unavailable'],
+        ];
 
-            return;
-        }
+        $fusedDecision = $decisionFusionService->fuse($aiDecision, $mtfContext);
+        $decision = $fusedDecision;
 
-        $indicator = $result['indicator'];
-        $decision = $result['decision'];
-        $decisionBeforeGuardrail = $decision;
+        $rawResponse = $aiResult['raw_response'] ?? null;
+        $modelUsed = $aiResult['model_used'] ?? 'ai-unavailable';
 
-        // --- Step 6: Guardrail (Rule 1 = MTF enforcement) ---
         $decision = $guardrailService->apply(
             $decision,
-            (float) $indicator->rsi,
-            (string) $indicator->trend,
-            $mtfResult,
+            (float) $triggerIndicator->rsi,
+            (string) $triggerIndicator->trend,
         );
 
-        $guardrailAccepted = in_array($decision['action'], ['BUY', 'SELL'], true)
-            && $decision['confidence'] >= 55;
+        $guardrailAccepted = in_array($decision['action'], ['BUY', 'SELL'], true);
+        $guardrailApplied = $decision['action'] !== ($fusedDecision['final_action'] ?? $fusedDecision['action']);
 
-        $priceChange24h = $this->resolvePriceChange24h($indicator);
+        $priceChange24h = $this->resolvePriceChange24h($triggerIndicator);
 
         $decision = $tradeLevelService->appendTradeLevels(
             $decision,
-            (float) $indicator->price,
+            (float) $triggerIndicator->price,
             $priceChange24h,
             $guardrailAccepted,
         );
 
         $decision = $positionSizingService->calculate($decision);
 
-        Log::info('[RunAiDecisionJob] Guardrail evaluated', [
-            'execution_id' => $this->executionId,
-            'coin' => $coin,
-            'timeframe' => $entryTimeframe,
-            'before_action' => $decisionBeforeGuardrail['action'],
-            'before_confidence' => $decisionBeforeGuardrail['confidence'],
-            'after_action' => $decision['action'],
-            'after_confidence' => $decision['confidence'],
-            'decision_status' => $guardrailAccepted ? 'accepted' : 'rejected',
-            'reason' => $decision['reason'],
-            'mtf_score' => $mtfResult->mtfScore,
-            'preliminary_action' => $mtfResult->preliminaryAction,
-        ]);
+        $finalSignal = new FinalSignalDTO(
+            action: (string) $decision['action'],
+            confidence: (int) $decision['confidence'],
+            riskLevel: (string) $decision['risk_level'],
+            entry: isset($decision['entry']) ? (float) $decision['entry'] : null,
+            takeProfit: isset($decision['take_profit']) ? (float) $decision['take_profit'] : null,
+            stopLoss: isset($decision['stop_loss']) ? (float) $decision['stop_loss'] : null,
+            positionSize: isset($decision['position_size']) ? (float) $decision['position_size'] : null,
+            flags: $this->normalizeFlags($decision['flags'] ?? []),
+            mtfScore: $mtfResult->mtfScore,
+            mode: $mtfResult->mode,
+        );
 
-        // --- Step 7: Persist + notify ---
-        $isTradeCandidate = in_array($decision['action'], ['BUY', 'SELL'])
-            && $decision['confidence'] >= 60;
+        $isDuplicate = AiDecision::query()
+            ->where('coin', $coin)
+            ->where('timeframe', $triggerTimeframe)
+            ->where('timestamp', $triggerIndicator->timestamp)
+            ->exists();
+
+        if ($isDuplicate) {
+            Log::info('[RunAiDecisionJob] Duplicate decision skipped', [
+                'execution_id' => $this->executionId,
+                'coin' => $coin,
+                'timeframe' => $triggerTimeframe,
+                'timestamp' => $triggerIndicator->timestamp?->toIso8601String(),
+            ]);
+
+            return;
+        }
 
         $startedAt = microtime(true);
-
-        Log::info('[RunAiDecisionJob] Persisting decision', [
-            'execution_id' => $this->executionId,
-            'coin' => $coin,
-            'timeframe' => $entryTimeframe,
-            'action' => $decision['action'],
-            'confidence' => $decision['confidence'],
-            'decision_status' => $guardrailAccepted ? 'accepted' : 'rejected',
-            'is_trade_candidate' => $isTradeCandidate,
-        ]);
 
         AiDecision::create([
             'execution_id' => $this->executionId,
             'coin' => $coin,
-            'timeframe' => $entryTimeframe,
-            'timestamp' => $indicator->timestamp,
+            'timeframe' => $triggerTimeframe,
+            'timestamp' => $triggerIndicator->timestamp,
             'input_data' => [
-                'price' => $indicator->price,
+                'price' => $triggerIndicator->price,
                 'price_change_24h' => $priceChange24h,
-                'rsi' => $indicator->rsi,
-                'ema9' => $indicator->ema9,
-                'ema21' => $indicator->ema21,
-                'trend' => $indicator->trend,
-                'timeframe' => $entryTimeframe,
-                'entry' => $decision['entry'] ?? null,
-                'take_profit' => $decision['take_profit'] ?? null,
-                'stop_loss' => $decision['stop_loss'] ?? null,
+                'rsi' => $triggerIndicator->rsi,
+                'ema9' => $triggerIndicator->ema9,
+                'ema21' => $triggerIndicator->ema21,
+                'trend' => $triggerIndicator->trend,
+                'timeframe' => $triggerTimeframe,
+                'trigger_mcp_score' => $triggerMcpResult->score,
+                'trigger_mcp_candidate' => $triggerMcpResult->actionCandidate->value,
+                'ai_action' => $fusedDecision['ai_action'] ?? null,
+                'ai_confidence' => $fusedDecision['ai_confidence'] ?? null,
                 'mtf_score' => $mtfResult->mtfScore,
+                'mtf_alignment' => $fusedDecision['mtf_alignment'] ?? null,
+                'mtf_context_bias' => $fusedDecision['context_bias'] ?? null,
+                'confidence_delta' => $fusedDecision['confidence_delta'] ?? 0,
+                'confidence_adjusted' => $fusedDecision['confidence_adjusted'] ?? null,
                 'preliminary_action' => $mtfResult->preliminaryAction,
                 'base_confidence' => $mtfResult->baseConfidence,
+                'mode' => $mtfResult->mode,
+                'role_timeframes' => $mtfResult->roleTimeframes,
+                'flags' => $finalSignal->flags,
                 'timeframe_summary' => $timeframeSummary,
+                'timeframe_signals' => $mtfResult->timeframeSignals,
+                'guardrail_applied' => $guardrailApplied,
+                'entry' => $finalSignal->entry,
+                'take_profit' => $finalSignal->takeProfit,
+                'stop_loss' => $finalSignal->stopLoss,
             ],
-            'action' => $decision['action'],
-            'confidence' => $decision['confidence'],
-            'is_trade_candidate' => $isTradeCandidate,
-            'risk_level' => $decision['risk_level'],
-            'reason' => $decision['reason'],
-            'price_at_decision' => $indicator->price,
-            'position_size' => $decision['position_size'] ?? null,
-            'risk_amount' => $decision['risk_amount'] ?? null,
-            'raw_response' => $result['raw_response'],
-            'model_used' => $result['model_used'],
+            'action' => $finalSignal->action,
+            'confidence' => $finalSignal->confidence,
+            'is_trade_candidate' => $guardrailAccepted && in_array($finalSignal->action, ['BUY', 'SELL'], true),
+            'risk_level' => $finalSignal->riskLevel,
+            'reason' => (string) ($decision['reason'] ?? 'mtf_final'),
+            'price_at_decision' => $triggerIndicator->price,
+            'position_size' => $finalSignal->positionSize,
+            'risk_amount' => isset($decision['risk_amount']) ? (float) $decision['risk_amount'] : null,
+            'raw_response' => $rawResponse,
+            'model_used' => $modelUsed,
             'latency_ms' => (int) ((microtime(true) - $startedAt) * 1000),
         ]);
 
-        if ($isTradeCandidate) {
+        if ($guardrailAccepted && in_array($finalSignal->action, ['BUY', 'SELL'], true)) {
             $notificationService->sendTradeSignal([
                 'execution_id' => $this->executionId,
                 'coin' => $coin,
-                'timeframe' => $entryTimeframe,
-                'action' => $decision['action'],
-                'confidence' => $decision['confidence'],
-                'risk_level' => $decision['risk_level'],
-                'reason' => $decision['reason'],
-                'entry' => $decision['entry'] ?? null,
-                'take_profit' => $decision['take_profit'] ?? null,
-                'stop_loss' => $decision['stop_loss'] ?? null,
-                'position_size' => $decision['position_size'] ?? null,
-                'risk_amount' => $decision['risk_amount'] ?? null,
+                'timeframe' => $triggerTimeframe,
+                'action' => $finalSignal->action,
+                'confidence' => $finalSignal->confidence,
+                'risk_level' => $finalSignal->riskLevel,
+                'reason' => (string) ($decision['reason'] ?? 'mtf_final'),
+                'entry' => $finalSignal->entry,
+                'take_profit' => $finalSignal->takeProfit,
+                'stop_loss' => $finalSignal->stopLoss,
+                'position_size' => $finalSignal->positionSize,
+                'flags' => $finalSignal->flags,
             ]);
         }
 
         Log::info('[RunAiDecisionJob] Decision persisted', [
             'execution_id' => $this->executionId,
             'coin' => $coin,
-            'timeframe' => $entryTimeframe,
-            'action' => $decision['action'],
-            'confidence' => $decision['confidence'],
+            'ai_action' => $fusedDecision['ai_action'] ?? null,
+            'ai_confidence' => $fusedDecision['ai_confidence'] ?? null,
+            'confidence_delta' => $fusedDecision['confidence_delta'] ?? 0,
+            'action' => $finalSignal->action,
+            'confidence' => $finalSignal->confidence,
+            'mtf_score' => $finalSignal->mtfScore,
+            'mode' => $finalSignal->mode,
+            'guardrail_applied' => $guardrailApplied,
+            'flags' => $finalSignal->flags,
             'decision_status' => $guardrailAccepted ? 'accepted' : 'rejected',
         ]);
     }
 
     /**
-     * Resolve the entry timeframe: the finest-grained (first-in-order) TF that passed MCP.
-     *
-     * The $orderedTimeframes list preserves the configured order, which is assumed to be
-     * sorted from finest to coarsest (e.g. 1m, 5m, 15m, 30m, 60m).
-     *
-     * @param  array<string, McpResult>  $passedResults  Non-null McpResults keyed by TF label.
-     * @param  array<string>  $orderedTimeframes  All configured TFs in order.
-     * @return string The selected entry timeframe label.
-     */
-    private function resolveEntryTimeframe(array $passedResults, array $orderedTimeframes): string
-    {
-        foreach ($orderedTimeframes as $timeframe) {
-            if (array_key_exists($timeframe, $passedResults)) {
-                return $timeframe;
-            }
-        }
-
-        // Fallback: use the first key from passed results (should not reach here).
-        return array_key_first($passedResults);
-    }
-
-    /**
-     * Resolve the list of coins to process.     *
-     * Uses the constructor-provided list when available; otherwise falls back to the
-     * application configuration so this job can be dispatched without arguments.
+     * Resolve the list of coins to process.
      *
      * @return array<string>
      */
@@ -348,9 +339,6 @@ class RunAiDecisionJob implements ShouldQueue
     /**
      * Resolve the list of timeframes to process.
      *
-     * Uses the constructor-provided list when available; otherwise reads directly
-     * from GeneralConfig so changes take effect without cache clears.
-     *
      * @return array<string>
      */
     private function resolveTimeframes(): array
@@ -358,6 +346,15 @@ class RunAiDecisionJob implements ShouldQueue
         return ! empty($this->timeframes)
             ? $this->timeframes
             : GeneralConfig::getTimeframes();
+    }
+
+    private function fetchLatestIndicator(string $coin, string $timeframe): ?MarketIndicator
+    {
+        return MarketIndicator::query()
+            ->where('coin', $coin)
+            ->where('timeframe', $timeframe)
+            ->orderByDesc('timestamp')
+            ->first();
     }
 
     private function resolvePriceChange24h(object $indicator): ?float
@@ -373,5 +370,33 @@ class RunAiDecisionJob implements ShouldQueue
         return is_numeric($priceChange24h)
             ? (float) $priceChange24h
             : null;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function normalizeFlags(mixed $flags): array
+    {
+        if (! is_array($flags)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($flags as $flag) {
+            if (! is_string($flag)) {
+                continue;
+            }
+
+            $trimmed = trim($flag);
+
+            if ($trimmed === '') {
+                continue;
+            }
+
+            $normalized[] = $trimmed;
+        }
+
+        return array_values(array_unique($normalized));
     }
 }

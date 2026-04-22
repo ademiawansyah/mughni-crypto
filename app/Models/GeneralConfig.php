@@ -83,6 +83,6 @@ class GeneralConfig extends Model
      */
     public static function getTimeframes(): array
     {
-        return static::getArray('timeframes', ['5m', '10m', '15m']);
+        return static::getArray('timeframes', ['5m', '15m', '30m', '60m']);
     }
 }

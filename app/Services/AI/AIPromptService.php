@@ -114,82 +114,109 @@ class AIPromptService
         float $price,
     ): string {
         return <<<PROMPT
-        You are a deterministic crypto trading signal engine.
-
-        You MUST strictly follow all rules below. No interpretation.
+        You are a crypto trading advisor.
 
         Return ONLY valid single-line JSON. No markdown, no explanation.
 
-        ---
+        OBJECTIVE:
+        - Pick the best action from BUY, SELL, HOLD using the provided context.
+        - HOLD only when edge is unclear or risk/reward is poor.
+        - Use confidence to express conviction, not as a hard gate.
 
-        HARD RULES (CANNOT BE BROKEN):
-
-        1. If RSI >= 25 AND RSI <= 75:
-        → action MUST be HOLD
-
-        2. BUY is ONLY allowed if:
-
-        * RSI < 25
-
-        3. SELL is ONLY allowed if:
-
-        * RSI > 75
-
-        4. If conditions are not met:
-        → action MUST be HOLD
-
-        ---
-
-        SIGNAL STRENGTH:
-
-        * Trend DOWN + RSI < 25 → strong BUY
-        * Trend UP + RSI > 75 → strong SELL
-
-        ---
-
-        CONFIDENCE RULES:
-
-        * Strong → 70–85
-        * Medium → 55–70
-        * If confidence < 55 → action MUST be HOLD
-
-        ---
-
-        VOLUME RULE:
-
-        * If volume is null or low → reduce confidence by 10
-
-        ---
-
-        RISK LEVEL RULES:
-
-        * confidence 70–100 → LOW
-        * confidence 40–69 → MEDIUM
-        * confidence 0–39 → HIGH
-
-        ---
+        GUIDANCE:
+        - RSI low + bullish structure can support BUY.
+        - RSI high + bearish structure can support SELL.
+        - Trend and EMA alignment should influence conviction.
+        - Lower volume context should reduce confidence.
 
         OUTPUT FORMAT (STRICT):
         {"action":"BUY|SELL|HOLD","confidence":number,"risk_level":"LOW|MEDIUM|HIGH","reason":"short reason"}
 
-        ---
-
         CONSTRAINTS:
-
-        * "action" must be BUY, SELL, or HOLD
-        * "confidence" must be integer 0–100
-        * "risk_level" must be LOW, MEDIUM, or HIGH
-        * "reason" max 20 words, plain English
-        * No text outside JSON
-
-        ---
+        - "action" must be BUY, SELL, or HOLD
+        - "confidence" must be integer 0-100
+        - "risk_level" must be LOW, MEDIUM, or HIGH
+        - "reason" max 24 words, plain English
+        - No text outside JSON
 
         INPUT:
+        Symbol: {$symbol}
+        Timeframe: {$timeframe}
+        MCP Action Candidate: {$actionCandidate}
+        MCP Score: {$score}
+        Trend: {$trend}
+        RSI: {$rsi}
+        EMA Trend: {$emaTrend}
+        MACD Signal: {$macdSignal}
+        Volume Ratio: {$volumeRatio}
+        Current Price: {$price}
+
+        PROMPT;
+    }
+
+    /**
+     * Build an AI prompt where MTF is advisory context, not a hard decision gate.
+     *
+     * @param  array{
+     *   symbol: string,
+     *   timeframe: string,
+     *   action_candidate: string,
+     *   score: int,
+     *   market_context: array{trend: string},
+     *   indicators: array{rsi: float, ema_trend: string, volume_ratio: float},
+     *   price: array{current: float},
+     * }  $mcpData
+     */
+    public function buildMtfContextPrompt(array $mcpData, MTFResultDTO $mtfResult, string $timeframeSummary = ''): string
+    {
+        $this->validateFields($mcpData);
+
+        $symbol = strtoupper(trim($mcpData['symbol']));
+        $entryTimeframe = trim($mcpData['timeframe']);
+        $actionCandidate = strtoupper(trim($mcpData['action_candidate']));
+        $score = (int) $mcpData['score'];
+        $trend = strtoupper(trim($mcpData['market_context']['trend']));
+        $rsi = round((float) $mcpData['indicators']['rsi'], 2);
+        $emaTrend = strtoupper(trim($mcpData['indicators']['ema_trend']));
+        $volumeRatio = round((float) $mcpData['indicators']['volume_ratio'], 2);
+        $price = round((float) $mcpData['price']['current'], 4);
+
+        return <<<PROMPT
+        You are a crypto trading advisor.
+
+        Return ONLY valid single-line JSON. No markdown, no explanation.
+
+        OBJECTIVE:
+        - Decide BUY, SELL, or HOLD from the full context.
+        - MTF data is contextual and should influence confidence, not force a direction.
+        - Do not default to HOLD unless edge is genuinely weak.
+
+        OUTPUT FORMAT (STRICT):
+        {"action":"BUY|SELL|HOLD","confidence":number,"risk_level":"LOW|MEDIUM|HIGH","reason":"short reason"}
+
+        CONSTRAINTS:
+        - "action" must be BUY, SELL, or HOLD
+        - "confidence" must be integer 0-100
+        - "risk_level" must be LOW, MEDIUM, or HIGH
+        - "reason" max 24 words, plain English
+        - No text outside JSON
+
+        ENTRY INPUT:
+        Symbol: {$symbol}
+        Entry Timeframe: {$entryTimeframe}
+        MCP Action Candidate: {$actionCandidate}
+        MCP Score: {$score}
         RSI: {$rsi}
         Trend: {$trend}
-        Volume: {$volumeRatio}
-        Price Change 24h: N/A
+        EMA Trend: {$emaTrend}
+        Volume Ratio: {$volumeRatio}
+        Current Price: {$price}
 
+        MTF CONTEXT (ADVISORY):
+        MTF Score: {$mtfResult->mtfScore}
+        MTF Mode: {$mtfResult->mode}
+        Base Confidence Hint: {$mtfResult->baseConfidence}
+        Timeframe Summary: {$timeframeSummary}
         PROMPT;
     }
 
@@ -366,6 +393,45 @@ class AIPromptService
         Trend: {$trend}
         Volume Ratio: {$volumeRatio}
 
+        PROMPT;
+    }
+
+    /**
+     * Build AI refinement prompt for deterministic MTF output.
+     *
+     * AI is strictly advisory and cannot change the preliminary action.
+     */
+    public function buildMtfRefinementPrompt(
+        MTFResultDTO $mtfResult,
+        string $timeframeSummary,
+        float $rsi5m,
+        string $trend5m,
+    ): string {
+        $preliminaryAction = strtoupper(trim($mtfResult->preliminaryAction));
+        $mode = strtolower(trim($mtfResult->mode));
+        $trend = strtoupper(trim($trend5m));
+
+        return <<<PROMPT
+        You are an AI confidence refiner for a deterministic multi-timeframe trading engine.
+
+        Return ONLY valid single-line JSON. No markdown, no explanation.
+
+        HARD RULES:
+        1. action MUST remain exactly PRELIMINARY_ACTION.
+        2. confidence adjustment from BASE_CONFIDENCE must be within +/-10.
+        3. Do not change any deterministic score or mode.
+
+        OUTPUT FORMAT:
+        {"action":"BUY|SELL|HOLD","confidence":number,"risk_level":"LOW|MEDIUM|HIGH","reason":"short reason"}
+
+        INPUT:
+        PRELIMINARY_ACTION: {$preliminaryAction}
+        BASE_CONFIDENCE: {$mtfResult->baseConfidence}
+        MTF_SCORE: {$mtfResult->mtfScore}
+        MODE: {$mode}
+        RSI_5M: {$rsi5m}
+        TREND_5M: {$trend}
+        TIMEFRAME_SUMMARY: {$timeframeSummary}
         PROMPT;
     }
 }
