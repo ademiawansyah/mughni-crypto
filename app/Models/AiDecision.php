@@ -33,6 +33,10 @@ class AiDecision extends Model
         'model_used',
         'latency_ms',
         'market_trend',
+        'price_after_5m',
+        'price_after_15m',
+        'max_profit',
+        'max_drawdown',
         'result',
     ];
 

@@ -11,6 +11,17 @@ class MarketContext extends Model
 
     protected $table = 'market_contexts';
 
+    protected $fillable = [
+        'coin',
+        'timeframe',
+        'market_regime',
+        'support_level',
+        'resistance_level',
+        'sentiment',
+        'source',
+        'timestamp',
+    ];
+
     public $timestamps = false;
 
     protected function casts(): array

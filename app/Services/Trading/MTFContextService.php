@@ -34,6 +34,7 @@ class MTFContextService
 
         return new MTFContextDTO(
             mtfScore: $mtfResult->mtfScore,
+            mode: $mtfResult->mode,
             alignment: $this->resolveAlignment($mtfResult->preliminaryAction, $contextBias),
             bias: $contextBias,
             timeframeSignals: $signals,

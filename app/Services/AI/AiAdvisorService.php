@@ -105,6 +105,7 @@ class AiAdvisorService
             : $this->failsafeDecision($coin, $timeframe, $executionId);
 
         $decision = $this->finalizeDecision($decision, $mcpResult->score);
+        $decision = $this->validateAiDecision($decision, (float) $indicator->rsi, $executionId);
 
         Log::info('[AiAdvisorService] Decision produced', [
             'execution_id' => $executionId,
@@ -181,6 +182,7 @@ class AiAdvisorService
             : $this->failsafeDecision($coin, $timeframe, $executionId);
 
         $decision = $this->finalizeDecision($decision, $mcpResult->score);
+        $decision = $this->validateAiDecision($decision, (float) $indicator->rsi, $executionId);
 
         Log::info('[AiAdvisorService] MTF-context AI decision produced', [
             'execution_id' => $executionId,
@@ -318,6 +320,7 @@ class AiAdvisorService
                 action: (string) $decision['action'],
                 confidence: (int) $decision['confidence'],
                 reason: (string) $decision['reason'],
+                validationFlags: (array) ($decision['flags'] ?? []),
             ),
             rawResponse: $result['raw_response'],
             modelUsed: (string) $result['model_used'],
@@ -475,6 +478,78 @@ class AiAdvisorService
             $mcpScore === 3 => [55, 90],
             default => [60, 95],
         };
+    }
+
+    /**
+     * Validate the AI decision against market RSI to detect hallucinated reasoning.
+     *
+     * Applies confidence penalties and forces HOLD on severe contradictions.
+     *
+     * Rules:
+     *   - RSI < 30 + reason mentions "overbought" → invalid_reason
+     *   - RSI > 70 + reason mentions "oversold"   → invalid_reason
+     *   - RSI < 20 + action = SELL                → invalid_action (severe)
+     *   - RSI > 80 + action = BUY                 → invalid_action (severe)
+     * Penalty: confidence -= 25 and flag "ai_validation_penalty"
+     * Severe contradiction: action forced to HOLD
+     *
+     * @param  array{action: string, confidence: int, risk_level: string, reason: string, flags?: array<int, string>}  $decision
+     * @return array{action: string, confidence: int, risk_level: string, reason: string, flags: array<int, string>}
+     */
+    private function validateAiDecision(array $decision, float $rsi, string $executionId): array
+    {
+        $validationFlags = [];
+        $reason = strtolower((string) $decision['reason']);
+        $action = strtoupper((string) $decision['action']);
+        $severeContradiction = false;
+
+        // RSI logic validation — catch hallucinated reasoning
+        if ($rsi < 30.0 && str_contains($reason, 'overbought')) {
+            $validationFlags[] = 'invalid_reason';
+        }
+
+        if ($rsi > 70.0 && str_contains($reason, 'oversold')) {
+            $validationFlags[] = 'invalid_reason';
+        }
+
+        // Action contradiction validation — catch directional hallucinations
+        if ($rsi < 20.0 && $action === 'SELL') {
+            $validationFlags[] = 'invalid_action';
+            $severeContradiction = true;
+        }
+
+        if ($rsi > 80.0 && $action === 'BUY') {
+            $validationFlags[] = 'invalid_action';
+            $severeContradiction = true;
+        }
+
+        if ($validationFlags === []) {
+            $decision['flags'] = (array) ($decision['flags'] ?? []);
+
+            return $decision;
+        }
+
+        $validationFlags[] = 'ai_validation_penalty';
+        $decision['confidence'] = max(0, (int) $decision['confidence'] - 25);
+        $decision['flags'] = array_values(array_unique(array_merge(
+            (array) ($decision['flags'] ?? []),
+            $validationFlags,
+        )));
+
+        if ($severeContradiction) {
+            $decision['action'] = 'HOLD';
+        }
+
+        Log::info('[AiAdvisorService] AI validation applied', [
+            'execution_id' => $executionId,
+            'rsi' => $rsi,
+            'original_action' => $action,
+            'final_action' => $decision['action'],
+            'confidence' => $decision['confidence'],
+            'validation_flags' => $validationFlags,
+        ]);
+
+        return $decision;
     }
 
     /**

@@ -2,6 +2,7 @@
 
 namespace App\Services\Trading;
 
+use App\Jobs\EvaluateAiDecisionJob;
 use App\Models\AiDecision;
 use App\Models\MarketIndicator;
 use App\Services\MCP\McpResult;
@@ -59,7 +60,7 @@ class SignalPersistenceService
 
         $startedAt = microtime(true);
 
-        AiDecision::create([
+        $persistedDecision = AiDecision::create([
             'execution_id' => $executionId,
             'coin' => $coin,
             'timeframe' => $triggerTimeframe,
@@ -105,6 +106,12 @@ class SignalPersistenceService
             'model_used' => $aiAdvice?->modelUsed ?? 'ai-unavailable',
             'latency_ms' => (int) ((microtime(true) - $startedAt) * 1000),
         ]);
+
+        EvaluateAiDecisionJob::dispatch($persistedDecision->id)
+            ->delay(now()->addMinutes(5));
+
+        EvaluateAiDecisionJob::dispatch($persistedDecision->id)
+            ->delay(now()->addMinutes(15));
 
         if ($guardrailAccepted && in_array($finalDecision->action, ['BUY', 'SELL'], true)) {
             $this->notificationService->sendTradeSignal([

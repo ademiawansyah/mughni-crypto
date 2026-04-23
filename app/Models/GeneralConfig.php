@@ -67,13 +67,23 @@ class GeneralConfig extends Model
     }
 
     /**
+     * Retrieve watchlist coins from general_configs (key: coins).
+     *
+     * @return array<string>
+     */
+    public static function getWatchlistCoins(): array
+    {
+        return static::getArray('coins', []);
+    }
+
+    /**
      * Retrieve the configured coin list.
      *
      * @return array<string>
      */
     public static function getCoins(): array
     {
-        return static::getArray('coins', ['bitcoin', 'ethereum', 'solana']);
+        return static::getWatchlistCoins();
     }
 
     /**

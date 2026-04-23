@@ -9,11 +9,13 @@ use Illuminate\Support\Facades\Log;
 /**
  * MTFDecisionService
  *
- * Deterministic role-based MTF decision engine:
- * - 60m: Direction (hard filter)
- * - 30m: Context score (weight 2.0)
- * - 15m: Setup score (weight 2.0)
- * - 5m: Trigger score (weight 1.0)
+ * Deterministic multi-timeframe (MTF) decision engine that works with 1+ timeframes.
+ *
+ * Role assignment (flexible based on timeframe count):
+ * - 1 TF: all roles use that timeframe
+ * - 2 TF: trigger/setup=smallest, context/direction=largest
+ * - 3 TF: trigger=smallest, setup=middle, context/direction=largest
+ * - 4+ TF: trigger=smallest, setup=2nd, context=2nd_to_last, direction=largest
  */
 class MTFDecisionService
 {
@@ -68,26 +70,71 @@ class MTFDecisionService
         $setupSignal = $signals[$roleTimeframes['setup']];
         $triggerSignal = $signals[$roleTimeframes['trigger']];
 
-        $contextScore = $this->scoreContext($contextSignal) * 2.0;
-        $setupScore = $this->scoreSetup($setupSignal) * 2.0;
-        $triggerScore = $this->scoreTrigger($triggerSignal) * 1.0;
-        $mtfScore = round($contextScore + $setupScore + $triggerScore, 4);
-
-        $directionMinutes = $this->timeframeToMinutes($roleTimeframes['direction']);
-        $thresholdAdjustment = $directionMinutes < 60 ? 0.5 : 0.0;
-        $preliminaryAction = $this->resolvePreliminaryAction($mtfScore, $thresholdAdjustment);
-
-        if ($directionSignal->trend === 'DOWN' && $preliminaryAction === 'BUY') {
-            $preliminaryAction = 'HOLD';
-            $flags[] = 'direction_filter_buy_blocked';
-        }
-
-        if ($directionSignal->trend === 'UP' && $preliminaryAction === 'SELL') {
-            $preliminaryAction = 'HOLD';
-            $flags[] = 'direction_filter_sell_blocked';
-        }
-
+        // Step 1: Detect mode (reversal if any signal has extreme RSI)
         $mode = $this->detectMode($signals);
+
+        // Step 2: Resolve dynamic weights based on mode
+        [$setupWeight, $contextWeight, $triggerWeight] = $this->resolveWeights($mode);
+
+        // Raw component scores — setup uses ×2 scale to preserve [-4, 4] range
+        $rawSetupScore = $this->scoreSetup($setupSignal) * 2.0;
+        $rawContextScore = (float) $this->scoreContext($contextSignal);
+        $rawTriggerScore = $this->scoreTrigger($triggerSignal);
+
+        // Step 3: Compute weighted mtf_score
+        $mtfScore = ($rawSetupScore * $setupWeight)
+            + ($rawContextScore * $contextWeight)
+            + ($rawTriggerScore * $triggerWeight);
+
+        // Step 4: Hard reversal override — non-negotiable when setup is at maximum
+        $reversalOverrideActive = false;
+        $reversalOverrideAction = null;
+
+        if (abs($rawSetupScore) >= 4.0 && $setupSignal->signalType === 'reversal') {
+            if ($rawSetupScore >= 4.0) {
+                $mtfScore = max($mtfScore, 3.0);
+                $reversalOverrideAction = 'BUY';
+            } else {
+                $mtfScore = min($mtfScore, -3.0);
+                $reversalOverrideAction = 'SELL';
+            }
+            $reversalOverrideActive = true;
+            $flags[] = 'mtf_reversal_override';
+        }
+
+        // Step 5: Extreme RSI boost — directional, first qualifying signal wins
+        foreach ($signals as $signal) {
+            if ($signal->rsi <= 20.0) {
+                $mtfScore += 1.0;
+                $flags[] = 'extreme_rsi_boost';
+                break;
+            }
+
+            if ($signal->rsi >= 80.0) {
+                $mtfScore -= 1.0;
+                $flags[] = 'extreme_rsi_boost';
+                break;
+            }
+        }
+
+        $mtfScore = round($mtfScore, 4);
+
+        // Step 6: Resolve preliminary action using new HOLD-reducing thresholds
+        $preliminaryAction = $reversalOverrideAction ?? $this->resolvePreliminaryAction($mtfScore, $flags);
+
+        // Direction filter — skipped when reversal override is active
+        if (! $reversalOverrideActive) {
+            if ($directionSignal->trend === 'DOWN' && $preliminaryAction === 'BUY') {
+                $preliminaryAction = 'HOLD';
+                $flags[] = 'direction_filter_buy_blocked';
+            }
+
+            if ($directionSignal->trend === 'UP' && $preliminaryAction === 'SELL') {
+                $preliminaryAction = 'HOLD';
+                $flags[] = 'direction_filter_sell_blocked';
+            }
+        }
+
         $baseConfidence = $this->deriveBaseConfidence($mtfScore);
 
         Log::info('[MTFDecisionService] MTF decision computed', [
@@ -97,11 +144,18 @@ class MTFDecisionService
             'preliminary_action' => $preliminaryAction,
             'base_confidence' => $baseConfidence,
             'mode' => $mode,
-            'context_score' => $contextScore,
-            'setup_score' => $setupScore,
-            'trigger_score' => $triggerScore,
+            'weights' => [
+                'setup' => $setupWeight,
+                'context' => $contextWeight,
+                'trigger' => $triggerWeight,
+            ],
+            'raw_scores' => [
+                'setup' => $rawSetupScore,
+                'context' => $rawContextScore,
+                'trigger' => $rawTriggerScore,
+            ],
             'role_timeframes' => $roleTimeframes,
-            'threshold_adjustment' => $thresholdAdjustment,
+            'reversal_override_active' => $reversalOverrideActive,
             'flags' => array_values(array_unique($flags)),
             'timeframe_signals' => $this->serializeSignals($signals),
         ]);
@@ -232,17 +286,43 @@ class MTFDecisionService
         };
     }
 
-    private function resolvePreliminaryAction(float $mtfScore, float $thresholdAdjustment = 0.0): string
+    /**
+     * Resolve dynamic scoring weights based on detected mode.
+     *
+     * Reversal mode amplifies setup (RSI extremes) and reduces context dominance.
+     * Trend-follow mode balances setup and context equally.
+     *
+     * @return array{0: float, 1: float, 2: float} [setupWeight, contextWeight, triggerWeight]
+     */
+    private function resolveWeights(string $mode): array
     {
-        $buyThreshold = 2.0 + $thresholdAdjustment;
-        $sellThreshold = -2.0 - $thresholdAdjustment;
-
-        if ($mtfScore >= $buyThreshold) {
-            return 'BUY';
+        if ($mode === 'reversal') {
+            return [0.70, 0.10, 0.20];
         }
 
-        if ($mtfScore <= $sellThreshold) {
-            return 'SELL';
+        return [0.40, 0.40, 0.20];
+    }
+
+    /**
+     * Resolve preliminary action from weighted mtf_score using HOLD-reducing thresholds.
+     *
+     * Thresholds: ≥2.5 → strong directional, 1.0–2.5 → weak directional (flagged), <1.0 → HOLD.
+     *
+     * @param  array<int, string>  $flags  Passed by reference so weak-signal flags can be appended.
+     */
+    private function resolvePreliminaryAction(float $mtfScore, array &$flags): string
+    {
+        $absScore = abs($mtfScore);
+        $direction = $mtfScore >= 0.0 ? 'BUY' : 'SELL';
+
+        if ($absScore >= 2.5) {
+            return $direction;
+        }
+
+        if ($absScore >= 1.0) {
+            $flags[] = $direction === 'BUY' ? 'weak_buy_signal' : 'weak_sell_signal';
+
+            return $direction;
         }
 
         return 'HOLD';
@@ -262,16 +342,58 @@ class MTFDecisionService
     }
 
     /**
+     * Assign roles to timeframes based on their duration.
+     *
+     * Works with any number of timeframes:
+     * - 1 TF: all roles assigned to that timeframe
+     * - 2 TF: trigger/setup use smallest, context/direction use largest
+     * - 3+ TF: trigger=smallest, setup=2nd, context=2nd_to_last, direction=largest
+     *
      * @param  array<string>  $sortedTimeframes
      * @return array{trigger: string, setup: string, context: string, direction: string}
      */
     private function assignRoleTimeframes(array $sortedTimeframes): array
     {
-        if (count($sortedTimeframes) < 4) {
-            throw new \InvalidArgumentException('MTFDecisionService requires at least 4 timeframes.');
+        $count = count($sortedTimeframes);
+
+        if ($count === 0) {
+            throw new \InvalidArgumentException('At least 1 timeframe is required.');
         }
 
-        $lastIndex = count($sortedTimeframes) - 1;
+        if ($count === 1) {
+            // All roles use the single timeframe
+            $tf = $sortedTimeframes[0];
+
+            return [
+                'trigger' => $tf,
+                'setup' => $tf,
+                'context' => $tf,
+                'direction' => $tf,
+            ];
+        }
+
+        if ($count === 2) {
+            // trigger/setup=smallest, context/direction=largest
+            return [
+                'trigger' => $sortedTimeframes[0],
+                'setup' => $sortedTimeframes[0],
+                'context' => $sortedTimeframes[1],
+                'direction' => $sortedTimeframes[1],
+            ];
+        }
+
+        if ($count === 3) {
+            // trigger=smallest, setup=middle, context/direction=largest
+            return [
+                'trigger' => $sortedTimeframes[0],
+                'setup' => $sortedTimeframes[1],
+                'context' => $sortedTimeframes[2],
+                'direction' => $sortedTimeframes[2],
+            ];
+        }
+
+        // 4+ timeframes: trigger=smallest, setup=2nd, context=2nd_to_last, direction=largest
+        $lastIndex = $count - 1;
 
         return [
             'trigger' => $sortedTimeframes[0],

@@ -8,6 +8,7 @@ use App\Services\AI\AiAdvisorService;
 use App\Services\Indicator\IndicatorService;
 use App\Services\Market\CandleBuilderService;
 use App\Services\Market\FetchMarketDataService;
+use App\Services\Market\MarketContextPersistenceService;
 use App\Services\MCP\MCPService;
 use App\Services\Trading\DecisionFusionService;
 use App\Services\Trading\DTO\AiDecisionDTO;
@@ -60,6 +61,7 @@ class RunTradingCycleJob implements ShouldQueue
         IndicatorService $indicatorService,
         MCPService $mcpService,
         MTFContextService $mtfContextService,
+        MarketContextPersistenceService $marketContextPersistenceService,
         AiAdvisorService $aiAdvisorService,
         DecisionFusionService $decisionFusionService,
         GuardrailService $guardrailService,
@@ -84,6 +86,7 @@ class RunTradingCycleJob implements ShouldQueue
                     indicatorService: $indicatorService,
                     mcpService: $mcpService,
                     mtfContextService: $mtfContextService,
+                    marketContextPersistenceService: $marketContextPersistenceService,
                     aiAdvisorService: $aiAdvisorService,
                     decisionFusionService: $decisionFusionService,
                     guardrailService: $guardrailService,
@@ -117,6 +120,7 @@ class RunTradingCycleJob implements ShouldQueue
         IndicatorService $indicatorService,
         MCPService $mcpService,
         MTFContextService $mtfContextService,
+        MarketContextPersistenceService $marketContextPersistenceService,
         AiAdvisorService $aiAdvisorService,
         DecisionFusionService $decisionFusionService,
         GuardrailService $guardrailService,
@@ -149,6 +153,7 @@ class RunTradingCycleJob implements ShouldQueue
 
         $mtfResult = $mtfDecisionService->evaluate($coin, $mcpResults, $timeframes, $this->executionId);
         $mtfContext = $mtfContextService->buildDto($mtfResult);
+        $marketContextPersistenceService->persist($mtfContext, $coin);
 
         Log::info('[RunTradingCycleJob] MTFContextDTO produced', [
             'execution_id' => $this->executionId,
@@ -156,7 +161,7 @@ class RunTradingCycleJob implements ShouldQueue
             'mtf_score' => $mtfContext->mtfScore,
             'alignment' => $mtfContext->alignment,
             'bias' => $mtfContext->bias,
-            'timeframe_signals' => array_map(static fn ($signal): array => $signal->toArray(), $timeframeSignals),
+            'timeframe_signals' => array_map(static fn($signal): array => $signal->toArray(), $timeframeSignals),
         ]);
 
         $triggerTimeframe = $mtfResult->roleTimeframes['trigger'];

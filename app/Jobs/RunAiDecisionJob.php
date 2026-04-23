@@ -6,6 +6,7 @@ use App\Models\AiDecision;
 use App\Models\GeneralConfig;
 use App\Models\MarketIndicator;
 use App\Services\AI\AiAdvisorService;
+use App\Services\Market\MarketContextPersistenceService;
 use App\Services\MCP\McpResult;
 use App\Services\MCP\MCPService;
 use App\Services\Notification\NotificationService;
@@ -75,6 +76,7 @@ class RunAiDecisionJob implements ShouldQueue
         TradeLevelService $tradeLevelService,
         PositionSizingService $positionSizingService,
         MTFDecisionService $mtfDecisionService,
+        MarketContextPersistenceService $marketContextPersistenceService,
     ): void {
         Log::info('[RunAiDecisionJob] Execution started', [
             'execution_id' => $this->executionId,
@@ -95,6 +97,7 @@ class RunAiDecisionJob implements ShouldQueue
                     tradeLevelService: $tradeLevelService,
                     positionSizingService: $positionSizingService,
                     mtfDecisionService: $mtfDecisionService,
+                    marketContextPersistenceService: $marketContextPersistenceService,
                     coin: $coin,
                     timeframes: $timeframes,
                 );
@@ -128,6 +131,7 @@ class RunAiDecisionJob implements ShouldQueue
         TradeLevelService $tradeLevelService,
         PositionSizingService $positionSizingService,
         MTFDecisionService $mtfDecisionService,
+        MarketContextPersistenceService $marketContextPersistenceService,
         string $coin,
         array $timeframes,
     ): void {
@@ -140,6 +144,8 @@ class RunAiDecisionJob implements ShouldQueue
 
         $mtfResult = $mtfDecisionService->evaluate($coin, $mcpResults, $timeframes, $this->executionId);
         $mtfContext = $mtfContextService->build($mtfResult);
+        $mtfContextDto = $mtfContextService->buildDto($mtfResult);
+        $marketContextPersistenceService->persist($mtfContextDto, $coin);
         $timeframeSummary = $mtfDecisionService->buildTimeframeSummary($mtfResult->timeframeSignals);
 
         $triggerTimeframe = $mtfResult->roleTimeframes['trigger'];
@@ -242,7 +248,7 @@ class RunAiDecisionJob implements ShouldQueue
 
         $startedAt = microtime(true);
 
-        AiDecision::create([
+        $persistedDecision = AiDecision::create([
             'execution_id' => $this->executionId,
             'coin' => $coin,
             'timeframe' => $triggerTimeframe,
@@ -288,6 +294,12 @@ class RunAiDecisionJob implements ShouldQueue
             'model_used' => $modelUsed,
             'latency_ms' => (int) ((microtime(true) - $startedAt) * 1000),
         ]);
+
+        EvaluateAiDecisionJob::dispatch($persistedDecision->id)
+            ->delay(now()->addMinutes(5));
+
+        EvaluateAiDecisionJob::dispatch($persistedDecision->id)
+            ->delay(now()->addMinutes(15));
 
         if ($guardrailAccepted && in_array($finalSignal->action, ['BUY', 'SELL'], true)) {
             $notificationService->sendTradeSignal([

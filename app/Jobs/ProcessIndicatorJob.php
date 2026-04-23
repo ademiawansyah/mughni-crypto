@@ -35,7 +35,7 @@ class ProcessIndicatorJob implements ShouldQueue
      * Create a new job instance.
      *
      * @param  array<int, string>  $coins
-     * @param  array<int, string>  $timeframes  Only the timeframes that had fresh data ingested.
+     * @param  array<int, string>  $timeframes  The timeframes that had fresh data ingested.
      */
     public function __construct(
         private readonly array $coins,
@@ -48,8 +48,7 @@ class ProcessIndicatorJob implements ShouldQueue
      *
      * Indicators are already calculated and stored by MarketDataService during
      * the ingest phase. This job simply forwards to RunTradingCycleJob with the
-     * timeframes that were actually ingested, preventing other timeframes from
-     * running AI decisions prematurely.
+     * timeframes that were actually ingested.
      */
     public function handle(): void
     {
