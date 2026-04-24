@@ -14,12 +14,79 @@ use App\Services\Trading\DTO\TimeframeSignalDTO as PipelineTimeframeSignalDTO;
 class MTFContextService
 {
     /**
+     * Default timeframe weights for the baseline 4-TF setup.
+     *
+     * @var array<string, float>
+     */
+    private const DEFAULT_TIMEFRAME_WEIGHTS = [
+        '5m' => 0.35,
+        '15m' => 0.25,
+        '30m' => 0.20,
+        '60m' => 0.20,
+    ];
+
+    public function __construct(
+        private readonly ConfigService $configService,
+    ) {}
+
+    /**
      * Build MTFContextDTO from deterministic MTF result output.
      */
     public function buildDto(MTFResultDTO $mtfResult): MTFContextDTO
     {
-        $contextBias = $this->resolveContextBias($mtfResult->mtfScore);
+        $signals = $this->buildPipelineSignals($mtfResult);
+        $computedContext = $this->computeContext($mtfResult);
+        $contextBias = $this->resolveContextBias($computedContext['mtf_score']);
 
+        return new MTFContextDTO(
+            mtfScore: $computedContext['mtf_score'],
+            direction: $computedContext['direction'],
+            mode: $computedContext['mode'],
+            alignment: $computedContext['alignment'],
+            bias: $contextBias,
+            timeframeSignals: $signals,
+            flags: $computedContext['flags'],
+        );
+    }
+
+    /**
+     * Build soft MTF context from an MTF result.
+     *
+     * @return array{
+     *   mtf_score: float,
+     *   direction: string,
+     *   alignment: string,
+     *   context_bias: string,
+     *   mode: string,
+     *   base_confidence: int,
+     *   flags: array<int, string>,
+     *   role_timeframes: array{trigger: string, setup: string, context: string, direction: string},
+     *   timeframe_signals: array<string, array{timeframe: string, rsi: float, trend: string, mcp_score: int, signal_type: string}>
+     * }
+     */
+    public function build(MTFResultDTO $mtfResult): array
+    {
+        $computedContext = $this->computeContext($mtfResult);
+        $contextBias = $this->resolveContextBias($computedContext['mtf_score']);
+
+        return [
+            'mtf_score' => $computedContext['mtf_score'],
+            'direction' => $computedContext['direction'],
+            'alignment' => $computedContext['alignment'],
+            'context_bias' => $contextBias,
+            'mode' => $computedContext['mode'],
+            'base_confidence' => $mtfResult->baseConfidence,
+            'flags' => $computedContext['flags'],
+            'role_timeframes' => $mtfResult->roleTimeframes,
+            'timeframe_signals' => $mtfResult->timeframeSignals,
+        ];
+    }
+
+    /**
+     * @return array<int, PipelineTimeframeSignalDTO>
+     */
+    private function buildPipelineSignals(MTFResultDTO $mtfResult): array
+    {
         $signals = [];
 
         foreach ($mtfResult->timeframeSignals as $signal) {
@@ -32,44 +99,267 @@ class MTFContextService
             );
         }
 
-        return new MTFContextDTO(
-            mtfScore: $mtfResult->mtfScore,
-            mode: $mtfResult->mode,
-            alignment: $this->resolveAlignment($mtfResult->preliminaryAction, $contextBias),
-            bias: $contextBias,
-            timeframeSignals: $signals,
-            flags: array_values(array_unique($mtfResult->flags)),
-        );
+        return $signals;
     }
 
     /**
-     * Build soft MTF context from an MTF result.
-     *
-     * @return array{
-     *   mtf_score: float,
-     *   alignment: string,
-     *   context_bias: string,
-     *   mode: string,
-     *   base_confidence: int,
-     *   flags: array<int, string>,
-     *   role_timeframes: array{trigger: string, setup: string, context: string, direction: string},
-     *   timeframe_signals: array<string, array{timeframe: string, rsi: float, trend: string, mcp_score: int, signal_type: string}>
-     * }
+     * @return array{mtf_score: float, direction: string, mode: string, alignment: string, flags: array<int, string>}
      */
-    public function build(MTFResultDTO $mtfResult): array
+    private function computeContext(MTFResultDTO $mtfResult): array
     {
-        $contextBias = $this->resolveContextBias($mtfResult->mtfScore);
+        $timeframes = $this->resolveConfiguredTimeframes($mtfResult);
+        $weights = $this->resolveNormalizedWeights($timeframes, $mtfResult->timeframeSignals);
+
+        $mtfScore = 0.0;
+        $directionScore = 0.0;
+        $directionByTimeframe = [];
+
+        foreach ($weights as $timeframe => $weight) {
+            $signal = $mtfResult->timeframeSignals[$timeframe] ?? null;
+
+            if (! is_array($signal)) {
+                continue;
+            }
+
+            $score = $this->resolveScore($signal);
+            $directionValue = $this->resolveDirectionValue($signal);
+
+            $mtfScore += $score * $weight;
+            $directionScore += $directionValue * $weight * $score;
+            $directionByTimeframe[$timeframe] = $directionValue;
+        }
+
+        $resolvedDirection = $this->resolveDirection($directionScore);
+        $flags = array_values(array_unique($mtfResult->flags));
+
+        if ($this->hasHighTimeframeConflict($weights, $mtfResult->timeframeSignals, $resolvedDirection)) {
+            $mtfScore -= 1.0;
+            $flags[] = 'htf_conflict';
+        }
 
         return [
-            'mtf_score' => $mtfResult->mtfScore,
-            'alignment' => $this->resolveAlignment($mtfResult->preliminaryAction, $contextBias),
-            'context_bias' => $contextBias,
-            'mode' => $mtfResult->mode,
-            'base_confidence' => $mtfResult->baseConfidence,
-            'flags' => array_values(array_unique($mtfResult->flags)),
-            'role_timeframes' => $mtfResult->roleTimeframes,
-            'timeframe_signals' => $mtfResult->timeframeSignals,
+            'mtf_score' => round($mtfScore, 4),
+            'direction' => $resolvedDirection,
+            'mode' => $this->detectMode($mtfResult->timeframeSignals),
+            'alignment' => $this->resolveSignalAlignment($directionByTimeframe),
+            'flags' => array_values(array_unique($flags)),
         ];
+    }
+
+    /**
+     * @return array<string>
+     */
+    private function resolveConfiguredTimeframes(MTFResultDTO $mtfResult): array
+    {
+        $configured = $this->configService->getTimeframes();
+
+        if ($configured !== []) {
+            return array_values(array_unique($configured));
+        }
+
+        return array_values(array_unique(array_keys($mtfResult->timeframeSignals)));
+    }
+
+    /**
+     * @param  array<string>  $timeframes
+     * @param  array<string, array{timeframe: string, rsi: float, trend: string, mcp_score: int, signal_type: string}>  $signals
+     * @return array<string, float>
+     */
+    private function resolveNormalizedWeights(array $timeframes, array $signals): array
+    {
+        $configuredWeights = $this->configuredTimeframeWeights();
+        $weights = [];
+
+        foreach ($timeframes as $timeframe) {
+            if (! array_key_exists($timeframe, $signals)) {
+                continue;
+            }
+
+            $weights[$timeframe] = (float) ($configuredWeights[$timeframe] ?? self::DEFAULT_TIMEFRAME_WEIGHTS[$timeframe] ?? 0.0);
+        }
+
+        $weights = array_filter($weights, static fn (float $weight): bool => $weight > 0.0);
+
+        if ($weights === []) {
+            $count = count($signals);
+
+            if ($count === 0) {
+                return [];
+            }
+
+            $equalWeight = 1.0 / $count;
+
+            foreach (array_keys($signals) as $timeframe) {
+                $weights[$timeframe] = $equalWeight;
+            }
+
+            return $weights;
+        }
+
+        $totalWeight = array_sum($weights);
+
+        if ($totalWeight <= 0.0) {
+            return [];
+        }
+
+        foreach ($weights as $timeframe => $weight) {
+            $weights[$timeframe] = $weight / $totalWeight;
+        }
+
+        return $weights;
+    }
+
+    /**
+     * @return array<string, float>
+     */
+    private function configuredTimeframeWeights(): array
+    {
+        try {
+            return (array) config('trading.timeframe_weights', []);
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * @param  array{timeframe: string, rsi: float, trend: string, mcp_score: int, signal_type: string}|array<string, mixed>  $signal
+     */
+    private function resolveScore(array $signal): float
+    {
+        $rawScore = $signal['score'] ?? $signal['mcp_score'] ?? 0;
+
+        return (float) max(0.0, min(4.0, (float) $rawScore));
+    }
+
+    /**
+     * @param  array{timeframe: string, rsi: float, trend: string, mcp_score: int, signal_type: string}|array<string, mixed>  $signal
+     */
+    private function resolveDirectionValue(array $signal): int
+    {
+        $direction = strtoupper(trim((string) ($signal['direction'] ?? '')));
+
+        if ($direction === '') {
+            $trend = strtoupper(trim((string) ($signal['trend'] ?? 'NEUTRAL')));
+            $direction = match ($trend) {
+                'UP', 'BUY' => 'BUY',
+                'DOWN', 'SELL' => 'SELL',
+                default => 'HOLD',
+            };
+        }
+
+        return match ($direction) {
+            'BUY' => 1,
+            'SELL' => -1,
+            default => 0,
+        };
+    }
+
+    private function resolveDirection(float $directionScore): string
+    {
+        if ($directionScore > 0.5) {
+            return 'BUY';
+        }
+
+        if ($directionScore < -0.5) {
+            return 'SELL';
+        }
+
+        return 'HOLD';
+    }
+
+    /**
+     * @param  array<string, array{timeframe: string, rsi: float, trend: string, mcp_score: int, signal_type: string}>  $signals
+     */
+    private function detectMode(array $signals): string
+    {
+        foreach ($signals as $signal) {
+            $rsi = (float) ($signal['rsi'] ?? 50.0);
+
+            if ($rsi <= 25.0 || $rsi >= 75.0) {
+                return 'reversal';
+            }
+        }
+
+        return 'trend_follow';
+    }
+
+    /**
+     * @param  array<string, int>  $directionByTimeframe
+     */
+    private function resolveSignalAlignment(array $directionByTimeframe): string
+    {
+        if ($directionByTimeframe === []) {
+            return 'mixed';
+        }
+
+        $uniqueDirections = array_values(array_unique(array_values($directionByTimeframe)));
+
+        if (count($uniqueDirections) === 1) {
+            return 'aligned';
+        }
+
+        if (in_array(1, $uniqueDirections, true) && in_array(-1, $uniqueDirections, true)) {
+            return 'conflict';
+        }
+
+        return 'mixed';
+    }
+
+    /**
+     * @param  array<string, float>  $weights
+     * @param  array<string, array{timeframe: string, rsi: float, trend: string, mcp_score: int, signal_type: string}>  $signals
+     */
+    private function hasHighTimeframeConflict(array $weights, array $signals, string $resolvedDirection): bool
+    {
+        if ($weights === [] || ! in_array($resolvedDirection, ['BUY', 'SELL'], true)) {
+            return false;
+        }
+
+        $highestTimeframe = null;
+        $highestMinutes = -1;
+
+        foreach (array_keys($weights) as $timeframe) {
+            $minutes = $this->timeframeToMinutes($timeframe);
+
+            if ($minutes > $highestMinutes) {
+                $highestMinutes = $minutes;
+                $highestTimeframe = $timeframe;
+            }
+        }
+
+        if ($highestTimeframe === null) {
+            return false;
+        }
+
+        $signal = $signals[$highestTimeframe] ?? null;
+
+        if (! is_array($signal)) {
+            return false;
+        }
+
+        $htfDirectionValue = $this->resolveDirectionValue($signal);
+        $htfScore = $this->resolveScore($signal);
+
+        if ($htfScore < 3.0) {
+            return false;
+        }
+
+        $resolvedDirectionValue = $resolvedDirection === 'BUY' ? 1 : -1;
+
+        return $htfDirectionValue !== 0 && $htfDirectionValue === ($resolvedDirectionValue * -1);
+    }
+
+    private function timeframeToMinutes(string $timeframe): int
+    {
+        if (preg_match('/^(\d+)m$/i', trim($timeframe), $matches) === 1) {
+            return (int) $matches[1];
+        }
+
+        if (preg_match('/^(\d+)h$/i', trim($timeframe), $matches) === 1) {
+            return ((int) $matches[1]) * 60;
+        }
+
+        return 0;
     }
 
     private function resolveContextBias(float $mtfScore): string
@@ -83,20 +373,5 @@ class MTFContextService
         }
 
         return 'neutral';
-    }
-
-    private function resolveAlignment(string $preliminaryAction, string $contextBias): string
-    {
-        $action = strtoupper(trim($preliminaryAction));
-
-        if ($action === 'HOLD' || $contextBias === 'neutral') {
-            return 'neutral';
-        }
-
-        if (($action === 'BUY' && $contextBias === 'bullish') || ($action === 'SELL' && $contextBias === 'bearish')) {
-            return 'aligned';
-        }
-
-        return 'contradictory';
     }
 }

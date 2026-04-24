@@ -15,6 +15,7 @@ readonly class MTFContextDTO
      */
     public function __construct(
         public float $mtfScore,
+        public string $direction,
         public string $mode,
         public string $alignment,
         public string $bias,
