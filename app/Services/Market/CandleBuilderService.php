@@ -3,7 +3,8 @@
 namespace App\Services\Market;
 
 use App\Services\Trading\DTO\CandleDTO;
-use App\Services\Trading\DTO\MarketDataDTO;
+use App\Services\Trading\TimeframeParser;
+use Illuminate\Support\Facades\Log;
 
 /**
  * CandleBuilderService
@@ -12,58 +13,72 @@ use App\Services\Trading\DTO\MarketDataDTO;
  */
 class CandleBuilderService
 {
+    private const MAX_POINTS = 500;
+
+    public function __construct(
+        private readonly TimeframeParser $timeframeParser,
+    ) {}
+
     /**
+     * Build candles from CoinGecko market chart arrays.
+     *
+     * @param  array<int, mixed>  $prices  Each item can be [timestamp, price] or scalar price.
+     * @param  array<int, mixed>  $volumes  Each item can be [timestamp, volume] or scalar volume.
      * @param  array<string>  $timeframes
      * @return array<int, CandleDTO>
      */
-    public function build(MarketDataDTO $marketData, array $timeframes): array
+    public function build(string $coin, array $prices, array $volumes, array $timeframes): array
     {
-        $sortedTimeframes = $this->sortTimeframes($timeframes);
+        $sortedTimeframes = $this->sortSupportedTimeframes($timeframes);
 
         if ($sortedTimeframes === []) {
             return [];
         }
 
-        $baseTimeframe = $sortedTimeframes[0];
-        $baseMinutes = $this->timeframeToMinutes($baseTimeframe);
-
-        $prices = array_values($marketData->prices);
-        $timestamps = array_values($marketData->timestamps);
+        [$pricePoints, $volumeByTimestamp] = $this->normalizeInputs($prices, $volumes);
 
         $candles = [];
 
         foreach ($sortedTimeframes as $timeframe) {
-            $targetMinutes = $this->timeframeToMinutes($timeframe);
+            $bucketSeconds = $this->timeframeParser->toSeconds($timeframe);
+            $bucketMap = [];
 
-            if ($targetMinutes === PHP_INT_MAX || $baseMinutes === PHP_INT_MAX || $targetMinutes < $baseMinutes) {
-                continue;
-            }
+            foreach ($pricePoints as $point) {
+                $timestamp = $point['timestamp'];
+                $price = $point['price'];
+                $bucket = (int) (floor($timestamp / $bucketSeconds) * $bucketSeconds);
+                $volume = $volumeByTimestamp[$timestamp] ?? 0.0;
 
-            if ($targetMinutes % $baseMinutes !== 0) {
-                continue;
-            }
+                if (! isset($bucketMap[$bucket])) {
+                    $bucketMap[$bucket] = [
+                        'open' => $price,
+                        'high' => $price,
+                        'low' => $price,
+                        'close' => $price,
+                        'volume' => $volume,
+                    ];
 
-            $factor = (int) ($targetMinutes / $baseMinutes);
-            $chunks = array_chunk($prices, max($factor, 1));
-            $timestampChunks = array_chunk($timestamps, max($factor, 1));
-
-            foreach ($chunks as $index => $chunk) {
-                if ($chunk === []) {
                     continue;
                 }
 
-                $tsChunk = $timestampChunks[$index] ?? [];
-                $lastTimestamp = $tsChunk !== []
-                    ? (int) end($tsChunk)
-                    : (int) ($timestamps[min(count($timestamps) - 1, $index)] ?? now()->valueOf());
+                $bucketMap[$bucket]['high'] = max($bucketMap[$bucket]['high'], $price);
+                $bucketMap[$bucket]['low'] = min($bucketMap[$bucket]['low'], $price);
+                $bucketMap[$bucket]['close'] = $price;
+                $bucketMap[$bucket]['volume'] += $volume;
+            }
 
+            ksort($bucketMap);
+
+            foreach ($bucketMap as $bucketTimestamp => $bucketData) {
                 $candles[] = new CandleDTO(
+                    coin: $coin,
                     timeframe: $timeframe,
-                    open: (float) $chunk[0],
-                    high: (float) max($chunk),
-                    low: (float) min($chunk),
-                    close: (float) end($chunk),
-                    timestamp: $lastTimestamp,
+                    volume: (float) $bucketData['volume'],
+                    open: (float) $bucketData['open'],
+                    high: (float) $bucketData['high'],
+                    low: (float) $bucketData['low'],
+                    close: (float) $bucketData['close'],
+                    timestampSeconds: (int) $bucketTimestamp,
                 );
             }
         }
@@ -72,28 +87,93 @@ class CandleBuilderService
     }
 
     /**
+     * @param  array<int, mixed>  $prices
+     * @param  array<int, mixed>  $volumes
+     * @return array{0: array<int, array{timestamp: int, price: float}>, 1: array<int, float>}
+     */
+    private function normalizeInputs(array $prices, array $volumes): array
+    {
+        $volumeByTimestamp = [];
+
+        foreach ($volumes as $index => $volumePoint) {
+            if (is_array($volumePoint) && count($volumePoint) >= 2) {
+                $timestamp = $this->normalizeTimestamp($volumePoint[0]);
+                $volumeByTimestamp[$timestamp] = (float) $volumePoint[1];
+
+                continue;
+            }
+
+            $volumeByTimestamp[$index] = is_numeric($volumePoint)
+                ? (float) $volumePoint
+                : 0.0;
+        }
+
+        $pricePoints = [];
+
+        foreach ($prices as $index => $pricePoint) {
+            if (is_array($pricePoint) && count($pricePoint) >= 2) {
+                $timestamp = $this->normalizeTimestamp($pricePoint[0]);
+                $price = (float) $pricePoint[1];
+            } else {
+                $timestamp = (int) $index;
+                $price = is_numeric($pricePoint) ? (float) $pricePoint : 0.0;
+            }
+
+            $pricePoints[] = [
+                'timestamp' => $timestamp,
+                'price' => $price,
+            ];
+        }
+
+        $pricePoints = array_values(array_filter(
+            $pricePoints,
+            static fn (array $point): bool => $point['timestamp'] > 0,
+        ));
+
+        usort($pricePoints, static fn (array $left, array $right): int => $left['timestamp'] <=> $right['timestamp']);
+
+        if (count($pricePoints) > self::MAX_POINTS) {
+            $pricePoints = array_slice($pricePoints, -self::MAX_POINTS);
+        }
+
+        return [$pricePoints, $volumeByTimestamp];
+    }
+
+    /**
      * @param  array<string>  $timeframes
      * @return array<string>
      */
-    private function sortTimeframes(array $timeframes): array
+    private function sortSupportedTimeframes(array $timeframes): array
     {
         $unique = array_values(array_unique($timeframes));
+        $supported = [];
 
-        usort($unique, fn (string $a, string $b): int => $this->timeframeToMinutes($a) <=> $this->timeframeToMinutes($b));
+        foreach ($unique as $timeframe) {
+            try {
+                $this->timeframeParser->toSeconds($timeframe);
+                $supported[] = trim($timeframe);
+            } catch (\InvalidArgumentException) {
+                Log::warning('[CandleBuilderService] Ignoring unsupported timeframe', [
+                    'timeframe' => $timeframe,
+                ]);
+            }
+        }
 
-        return $unique;
+        return $this->timeframeParser->sortUnique($supported);
     }
 
-    private function timeframeToMinutes(string $timeframe): int
+    private function normalizeTimestamp(mixed $timestamp): int
     {
-        if (preg_match('/^(\d+)m$/i', trim($timeframe), $matches) === 1) {
-            return (int) $matches[1];
+        if (! is_numeric($timestamp)) {
+            return 0;
         }
 
-        if (preg_match('/^(\d+)h$/i', trim($timeframe), $matches) === 1) {
-            return ((int) $matches[1]) * 60;
+        $normalized = (int) $timestamp;
+
+        if ($normalized > 1000000000000) {
+            $normalized = (int) floor($normalized / 1000);
         }
 
-        return PHP_INT_MAX;
+        return $normalized;
     }
 }

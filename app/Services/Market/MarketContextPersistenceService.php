@@ -22,8 +22,9 @@ class MarketContextPersistenceService
      *
      * @param  MTFContextDTO  $mtf  Aggregated multi-timeframe context DTO.
      * @param  string  $coin  The coin symbol (e.g. "BTC", "ETH").
+     * @param  array<string, mixed>  $dashboardSnapshot  Per-coin dashboard fields.
      */
-    public function persist(MTFContextDTO $mtf, string $coin): void
+    public function persist(MTFContextDTO $mtf, string $coin, array $dashboardSnapshot = []): void
     {
         foreach ($mtf->timeframeSignals as $signal) {
             try {
@@ -60,14 +61,71 @@ class MarketContextPersistenceService
                 ]);
             }
         }
+
+        $this->persistSummaryRow($mtf, $coin, $dashboardSnapshot);
     }
 
     /**
      * Backward-compatible alias for older pipeline call sites.
      */
-    public function persistFromMTF(MTFContextDTO $mtf, string $coin): void
+    public function persistFromMTF(MTFContextDTO $mtf, string $coin, array $dashboardSnapshot = []): void
     {
-        $this->persist($mtf, $coin);
+        $this->persist($mtf, $coin, $dashboardSnapshot);
+    }
+
+    /**
+     * @param  array<string, mixed>  $dashboardSnapshot
+     */
+    private function persistSummaryRow(MTFContextDTO $mtf, string $coin, array $dashboardSnapshot): void
+    {
+        $allowedKeys = [
+            'execution_id',
+            'mcp_passed',
+            'mcp_score',
+            'mcp_candidate',
+            'mcp_timeframe',
+            'mcp_reason',
+            'mtf_score',
+            'preliminary_action',
+            'base_confidence',
+            'role_timeframes',
+            'timeframe_summary',
+            'fusion_ai_action',
+            'fusion_ai_confidence',
+            'fusion_final_action',
+            'fusion_confidence_adjusted',
+            'final_action',
+            'final_confidence',
+            'decision_status',
+        ];
+
+        $payload = [
+            'market_regime' => $mtf->mode,
+            'sentiment' => $this->normalizeAlignment($mtf->alignment),
+            'timestamp' => now(),
+        ];
+
+        foreach ($allowedKeys as $key) {
+            if (array_key_exists($key, $dashboardSnapshot)) {
+                $payload[$key] = $dashboardSnapshot[$key];
+            }
+        }
+
+        try {
+            MarketContext::updateOrCreate(
+                [
+                    'coin' => $coin,
+                    'timeframe' => 'summary',
+                    'source' => 'mtf',
+                ],
+                $payload,
+            );
+        } catch (\Throwable $e) {
+            Log::warning('[MarketContextPersistenceService] Failed to persist summary context', [
+                'coin' => $coin,
+                'exception' => $e->getMessage(),
+            ]);
+        }
     }
 
     private function normalizeAlignment(string $alignment): string

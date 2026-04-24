@@ -33,6 +33,12 @@ composer:
 migrate:
 	docker exec -it al_mughni php artisan migrate
 
+migrate-force:
+	docker exec -it al_mughni php artisan migrate --force
+
+migrate-refresh:
+	docker exec -it al_mughni php artisan migrate:refresh
+
 seed:
 	docker exec -it al_mughni php artisan db:seed --force
 

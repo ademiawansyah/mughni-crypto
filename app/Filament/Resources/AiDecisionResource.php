@@ -6,12 +6,11 @@ use App\Filament\Resources\AiDecisionResource\Pages;
 use App\Models\AiDecision;
 use App\Models\GeneralConfig;
 use App\Models\MarketContext;
-use Filament\Actions\ViewAction;
+use App\Models\MarketIndicator;
 use Filament\Resources\Resource;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\BadgeColumn;
 use Filament\Tables\Columns\TextColumn;
-use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -23,7 +22,7 @@ use Illuminate\Database\Eloquent\Builder;
  */
 class AiDecisionResource extends Resource
 {
-    protected static ?string $model = AiDecision::class;
+    protected static ?string $model = MarketContext::class;
 
     protected static \BackedEnum|string|null $navigationIcon = Heroicon::ChartBar;
 
@@ -43,15 +42,11 @@ class AiDecisionResource extends Resource
             return $query->whereRaw('1 = 0');
         }
 
-        $latestDecisionIds = AiDecision::query()
-            ->whereIn('coin', $watchlist)
-            ->selectRaw('DISTINCT ON (coin) id')
-            ->orderBy('coin')
-            ->orderByDesc('created_at');
-
         return $query
-            ->whereIn('id', $latestDecisionIds)
-            ->orderByDesc('created_at');
+            ->whereIn('coin', $watchlist)
+            ->where('timeframe', 'summary')
+            ->whereIn('source', ['mtf', 'mtf_service'])
+            ->orderByDesc('timestamp');
     }
 
     public static function table(Table $table): Table
@@ -64,57 +59,106 @@ class AiDecisionResource extends Resource
                     ->searchable()
                     ->weight('bold'),
 
-                TextColumn::make('price_at_decision')
+                TextColumn::make('price')
                     ->label('Price')
+                    ->state(fn(MarketContext $record): ?float => static::resolvePrice($record))
                     ->numeric(decimalPlaces: 4)
+                    ->placeholder('—')
                     ->sortable(),
 
-                TextColumn::make('rsi')
+                TextColumn::make('rsi_display')
                     ->label('RSI')
-                    ->state(fn(AiDecision $record): string => static::resolveRsi($record))
-                    ->color(fn(AiDecision $record): string => static::rsiColor($record))
-                    ->sortable(
-                        query: fn(Builder $query, string $direction) => $query
-                            ->leftJoin('market_indicators as mi_rsi', function ($join) {
-                                $join->on('ai_decisions.coin', '=', 'mi_rsi.coin')
-                                    ->on('ai_decisions.timeframe', '=', 'mi_rsi.timeframe')
-                                    ->on('ai_decisions.timestamp', '=', 'mi_rsi.timestamp');
-                            })
-                            ->orderBy('mi_rsi.rsi', $direction)
-                    ),
+                    ->state(fn(MarketContext $record): string => static::resolveRsi($record))
+                    ->color(fn(MarketContext $record): string => static::rsiColor($record)),
 
-                BadgeColumn::make('trend')
+                BadgeColumn::make('trend_display')
                     ->label('Trend')
-                    ->state(fn(AiDecision $record): string => static::resolveTrend($record))
+                    ->state(fn(MarketContext $record): string => static::resolveTrend($record))
                     ->colors([
                         'success' => 'UP',
                         'danger' => 'DOWN',
                         'secondary' => 'NEUTRAL',
                     ]),
 
-                BadgeColumn::make('action')
+                BadgeColumn::make('mcp_passed')
+                    ->label('MCP')
+                    ->state(fn(MarketContext $record): string => $record->mcp_passed ? 'PASS' : 'FAIL')
+                    ->colors([
+                        'success' => 'PASS',
+                        'danger' => 'FAIL',
+                    ]),
+
+                TextColumn::make('mcp_score')
+                    ->label('MCP Score')
+                    ->placeholder('—')
+                    ->sortable(),
+
+                BadgeColumn::make('mcp_candidate')
+                    ->label('MCP Candidate')
+                    ->formatStateUsing(fn(?string $state): string => $state ?? 'NONE')
                     ->colors([
                         'success' => 'BUY',
                         'danger' => 'SELL',
                         'warning' => 'HOLD',
+                        'secondary' => 'NONE',
                     ])
                     ->sortable(),
 
-                TextColumn::make('confidence')
-                    ->label('Conf %')
-                    ->suffix('%')
+                BadgeColumn::make('preliminary_action')
+                    ->label('MTF Decision')
+                    ->formatStateUsing(fn(?string $state): string => $state ?? 'HOLD')
+                    ->colors([
+                        'success' => 'BUY',
+                        'danger' => 'SELL',
+                        'warning' => 'HOLD',
+                    ]),
+
+                TextColumn::make('mtf_score')
+                    ->label('MTF Score')
+                    ->numeric(decimalPlaces: 2)
+                    ->placeholder('—')
                     ->sortable(),
 
-                TextColumn::make('risk_level')
+                BadgeColumn::make('fusion_final_action')
+                    ->label('Fusion')
+                    ->formatStateUsing(fn(?string $state): string => $state ?? 'N/A')
+                    ->colors([
+                        'success' => 'BUY',
+                        'danger' => 'SELL',
+                        'warning' => 'HOLD',
+                        'secondary' => 'N/A',
+                    ]),
+
+                BadgeColumn::make('action_display')
+                    ->label('Action')
+                    ->state(fn(MarketContext $record): string => static::resolveAction($record))
+                    ->colors([
+                        'success' => 'BUY',
+                        'danger' => 'SELL',
+                        'warning' => 'HOLD',
+                        'secondary' => 'N/A',
+                    ]),
+
+                TextColumn::make('confidence_display')
+                    ->label('Conf %')
+                    ->state(fn(MarketContext $record): string => static::resolveConfidence($record))
+                    ->suffix('%')
+                    ->sortable(false),
+
+                TextColumn::make('risk_display')
                     ->label('Risk')
+                    ->state(fn(MarketContext $record): string => static::resolveRisk($record))
                     ->badge()
                     ->color(fn(string $state): string => match ($state) {
                         'LOW' => 'success',
                         'MEDIUM' => 'warning',
+                        'N/A' => 'secondary',
                         default => 'danger',
                     }),
 
-                BadgeColumn::make('result')
+                BadgeColumn::make('result_display')
+                    ->label('Result')
+                    ->state(fn(MarketContext $record): ?string => static::resolveResult($record))
                     ->colors([
                         'success' => 'win',
                         'danger' => 'loss',
@@ -124,7 +168,7 @@ class AiDecisionResource extends Resource
 
                 BadgeColumn::make('mtf_mode')
                     ->label('MTF Mode')
-                    ->state(fn(AiDecision $record): string => static::resolveMtfMode($record))
+                    ->state(fn(MarketContext $record): string => static::resolveMtfMode($record))
                     ->colors([
                         'info' => 'trend_follow',
                         'warning' => 'reversal',
@@ -133,7 +177,7 @@ class AiDecisionResource extends Resource
 
                 BadgeColumn::make('mtf_alignment')
                     ->label('MTF Align')
-                    ->state(fn(AiDecision $record): string => static::resolveMtfAlignment($record))
+                    ->state(fn(MarketContext $record): string => static::resolveMtfAlignment($record))
                     ->colors([
                         'success' => 'aligned',
                         'warning' => 'mixed',
@@ -143,21 +187,25 @@ class AiDecisionResource extends Resource
 
                 TextColumn::make('price_after_5m')
                     ->label('+5m')
+                    ->state(fn(MarketContext $record): ?string => static::resolvePriceAfter($record, 'price_after_5m'))
                     ->numeric(decimalPlaces: 4)
                     ->placeholder('—'),
 
                 TextColumn::make('price_after_15m')
                     ->label('+15m')
+                    ->state(fn(MarketContext $record): ?string => static::resolvePriceAfter($record, 'price_after_15m'))
                     ->numeric(decimalPlaces: 4)
                     ->placeholder('—'),
 
                 TextColumn::make('max_profit')
                     ->label('Max Profit')
+                    ->state(fn(MarketContext $record): ?string => static::resolvePriceAfter($record, 'max_profit'))
                     ->numeric(decimalPlaces: 4)
                     ->placeholder('—'),
 
                 TextColumn::make('max_drawdown')
                     ->label('Max DD')
+                    ->state(fn(MarketContext $record): ?string => static::resolvePriceAfter($record, 'max_drawdown'))
                     ->numeric(decimalPlaces: 4)
                     ->placeholder('—'),
 
@@ -166,31 +214,8 @@ class AiDecisionResource extends Resource
                     ->dateTime('Y-m-d H:i')
                     ->sortable(),
             ])
-            ->filters([
-                SelectFilter::make('action')
-                    ->options([
-                        'BUY' => 'BUY',
-                        'SELL' => 'SELL',
-                        'HOLD' => 'HOLD',
-                    ]),
-
-                SelectFilter::make('result')
-                    ->options([
-                        'win' => 'Win',
-                        'loss' => 'Loss',
-                    ]),
-
-                SelectFilter::make('risk_level')
-                    ->label('Risk Level')
-                    ->options([
-                        'LOW' => 'Low',
-                        'MEDIUM' => 'Medium',
-                        'HIGH' => 'High',
-                    ]),
-            ])
-            ->actions([
-                ViewAction::make(),
-            ])
+            ->filters([])
+            ->actions([])
             ->bulkActions([])
             ->striped();
     }
@@ -204,31 +229,51 @@ class AiDecisionResource extends Resource
     {
         return [
             'index' => Pages\ListAiDecisions::route('/'),
-            'view' => Pages\ViewAiDecision::route('/{record}'),
         ];
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers — resolve joined data without N+1 by using raw input_data cache
-    // -------------------------------------------------------------------------
-
-    private static function resolveRsi(AiDecision $record): string
+    private static function resolvePrice(MarketContext $record): ?float
     {
-        $inputData = $record->input_data;
+        $decision = static::latestDecisionByCoin()[$record->coin] ?? null;
+
+        if ($decision !== null && is_numeric($decision->price_at_decision)) {
+            return (float) $decision->price_at_decision;
+        }
+
+        $indicator = static::latestIndicatorByCoin()[$record->coin] ?? null;
+
+        if ($indicator !== null && is_numeric($indicator->price)) {
+            return (float) $indicator->price;
+        }
+
+        return null;
+    }
+
+    private static function resolveRsi(MarketContext $record): string
+    {
+        $decision = static::latestDecisionByCoin()[$record->coin] ?? null;
+        $inputData = $decision?->input_data;
+
         if (is_array($inputData) && isset($inputData['rsi'])) {
             return number_format((float) $inputData['rsi'], 2);
+        }
+
+        $indicator = static::latestIndicatorByCoin()[$record->coin] ?? null;
+
+        if ($indicator !== null && is_numeric($indicator->rsi)) {
+            return number_format((float) $indicator->rsi, 2);
         }
 
         return '—';
     }
 
-    private static function rsiColor(AiDecision $record): string
+    private static function rsiColor(MarketContext $record): string
     {
-        $inputData = $record->input_data;
-        if (! is_array($inputData) || ! isset($inputData['rsi'])) {
+        $rsi = static::resolveRsiNumeric($record);
+
+        if ($rsi === null) {
             return 'secondary';
         }
-        $rsi = (float) $inputData['rsi'];
 
         if ($rsi >= 70) {
             return 'danger';
@@ -240,9 +285,11 @@ class AiDecisionResource extends Resource
         return 'secondary';
     }
 
-    private static function resolveTrend(AiDecision $record): string
+    private static function resolveTrend(MarketContext $record): string
     {
-        $inputData = $record->input_data;
+        $decision = static::latestDecisionByCoin()[$record->coin] ?? null;
+        $inputData = $decision?->input_data;
+
         if (is_array($inputData) && isset($inputData['ema9'], $inputData['ema21'])) {
             return (float) $inputData['ema9'] > (float) $inputData['ema21'] ? 'UP' : 'DOWN';
         }
@@ -251,21 +298,94 @@ class AiDecisionResource extends Resource
             return strtoupper((string) $inputData['trend']);
         }
 
+        $indicator = static::latestIndicatorByCoin()[$record->coin] ?? null;
+
+        if ($indicator !== null && is_string($indicator->trend)) {
+            $trend = strtoupper(trim($indicator->trend));
+
+            return match ($trend) {
+                'UPTREND', 'UP' => 'UP',
+                'DOWNTREND', 'DOWN' => 'DOWN',
+                default => 'NEUTRAL',
+            };
+        }
+
         return 'NEUTRAL';
     }
 
-    private static function resolveMtfMode(AiDecision $record): string
+    private static function resolveAction(MarketContext $record): string
+    {
+        $decision = static::latestDecisionByCoin()[$record->coin] ?? null;
+
+        if ($decision !== null && is_string($decision->action)) {
+            return strtoupper($decision->action);
+        }
+
+        if (is_string($record->final_action) && $record->final_action !== '') {
+            return strtoupper($record->final_action);
+        }
+
+        return 'HOLD';
+    }
+
+    private static function resolveConfidence(MarketContext $record): string
+    {
+        $decision = static::latestDecisionByCoin()[$record->coin] ?? null;
+
+        if ($decision !== null) {
+            return (string) ((int) $decision->confidence);
+        }
+
+        if ($record->final_confidence !== null) {
+            return (string) ((int) $record->final_confidence);
+        }
+
+        return '0';
+    }
+
+    private static function resolveRisk(MarketContext $record): string
+    {
+        $decision = static::latestDecisionByCoin()[$record->coin] ?? null;
+
+        if ($decision !== null && is_string($decision->risk_level)) {
+            return strtoupper($decision->risk_level);
+        }
+
+        return 'N/A';
+    }
+
+    private static function resolveResult(MarketContext $record): ?string
+    {
+        $decision = static::latestDecisionByCoin()[$record->coin] ?? null;
+
+        return $decision?->result;
+    }
+
+    private static function resolveMtfMode(MarketContext $record): string
     {
         $context = static::latestMtfContextByCoin()[$record->coin] ?? null;
 
         return $context['market_regime'] ?? 'n/a';
     }
 
-    private static function resolveMtfAlignment(AiDecision $record): string
+    private static function resolveMtfAlignment(MarketContext $record): string
     {
         $context = static::latestMtfContextByCoin()[$record->coin] ?? null;
 
         return $context['sentiment'] ?? 'n/a';
+    }
+
+    private static function resolvePriceAfter(MarketContext $record, string $key): ?string
+    {
+        $decision = static::latestDecisionByCoin()[$record->coin] ?? null;
+
+        if ($decision === null) {
+            return null;
+        }
+
+        $value = $decision->{$key};
+
+        return is_numeric($value) ? (string) $value : null;
     }
 
     /**
@@ -297,5 +417,73 @@ class AiDecisionResource extends Resource
                 ])
                 ->all();
         });
+    }
+
+    /**
+     * @return array<string, AiDecision>
+     */
+    private static function latestDecisionByCoin(): array
+    {
+        return once(function (): array {
+            $watchlist = GeneralConfig::getWatchlistCoins();
+
+            if ($watchlist === []) {
+                return [];
+            }
+
+            return AiDecision::query()
+                ->whereIn('coin', $watchlist)
+                ->selectRaw('DISTINCT ON (coin) *')
+                ->orderBy('coin')
+                ->orderByDesc('timestamp')
+                ->get()
+                ->mapWithKeys(fn(AiDecision $decision): array => [$decision->coin => $decision])
+                ->all();
+        });
+    }
+
+    /**
+     * @return array<string, MarketIndicator>
+     */
+    private static function latestIndicatorByCoin(): array
+    {
+        return once(function (): array {
+            $watchlist = GeneralConfig::getWatchlistCoins();
+
+            if ($watchlist === []) {
+                return [];
+            }
+
+            $configuredTimeframes = GeneralConfig::getTimeframes();
+            $displayTimeframe = $configuredTimeframes[0] ?? '5m';
+
+            return MarketIndicator::query()
+                ->whereIn('coin', $watchlist)
+                ->where('timeframe', $displayTimeframe)
+                ->selectRaw('DISTINCT ON (coin) *')
+                ->orderBy('coin')
+                ->orderByDesc('timestamp')
+                ->get()
+                ->mapWithKeys(fn(MarketIndicator $indicator): array => [$indicator->coin => $indicator])
+                ->all();
+        });
+    }
+
+    private static function resolveRsiNumeric(MarketContext $record): ?float
+    {
+        $decision = static::latestDecisionByCoin()[$record->coin] ?? null;
+        $inputData = $decision?->input_data;
+
+        if (is_array($inputData) && isset($inputData['rsi']) && is_numeric($inputData['rsi'])) {
+            return (float) $inputData['rsi'];
+        }
+
+        $indicator = static::latestIndicatorByCoin()[$record->coin] ?? null;
+
+        if ($indicator !== null && is_numeric($indicator->rsi)) {
+            return (float) $indicator->rsi;
+        }
+
+        return null;
     }
 }
