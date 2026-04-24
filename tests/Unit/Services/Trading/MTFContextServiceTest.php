@@ -15,6 +15,9 @@ class MTFContextServiceTest extends TestCase
         $configService
             ->method('getTimeframes')
             ->willReturn(['5m', '15m', '30m', '60m']);
+        $configService
+            ->method('getTimeframeWeights')
+            ->willReturn([]);
 
         $service = new MTFContextService($configService);
 
@@ -35,12 +38,12 @@ class MTFContextServiceTest extends TestCase
 
         $context = $service->buildDto($result);
 
-        $this->assertSame(2.75, $context->mtfScore);
+        $this->assertSame(3.75, $context->mtfScore);
         $this->assertSame('BUY', $context->direction);
         $this->assertSame('trend_follow', $context->mode);
         $this->assertSame('aligned', $context->alignment);
         $this->assertSame('bullish', $context->bias);
-        $this->assertSame([], $context->flags);
+        $this->assertSame(['entry_trigger_boost'], $context->flags);
     }
 
     public function test_it_applies_htf_conflict_penalty_and_sets_reversal_mode_when_rsi_is_extreme(): void
@@ -49,6 +52,9 @@ class MTFContextServiceTest extends TestCase
         $configService
             ->method('getTimeframes')
             ->willReturn(['5m', '15m', '30m', '60m']);
+        $configService
+            ->method('getTimeframeWeights')
+            ->willReturn([]);
 
         $service = new MTFContextService($configService);
 
@@ -69,11 +75,11 @@ class MTFContextServiceTest extends TestCase
 
         $context = $service->buildDto($result);
 
-        $this->assertSame(2.8, $context->mtfScore);
+        $this->assertSame(3.5, $context->mtfScore);
         $this->assertSame('BUY', $context->direction);
         $this->assertSame('reversal', $context->mode);
         $this->assertSame('conflict', $context->alignment);
         $this->assertSame('bullish', $context->bias);
-        $this->assertSame(['preexisting_flag', 'htf_conflict'], $context->flags);
+        $this->assertSame(['preexisting_flag', 'htf_conflict', 'mtf_conflict_soft', 'entry_trigger_boost'], $context->flags);
     }
 }

@@ -13,6 +13,8 @@ use App\Services\Trading\DTO\TimeframeSignalDTO as PipelineTimeframeSignalDTO;
  */
 class MTFContextService
 {
+    private const SOFT_CONFLICT_PENALTY = -0.3;
+
     /**
      * Default timeframe weights for the baseline 4-TF setup.
      *
@@ -130,6 +132,7 @@ class MTFContextService
         }
 
         $resolvedDirection = $this->resolveDirection($directionScore);
+        $alignment = $this->resolveSignalAlignment($directionByTimeframe);
         $flags = array_values(array_unique($mtfResult->flags));
 
         if ($this->hasHighTimeframeConflict($weights, $mtfResult->timeframeSignals, $resolvedDirection)) {
@@ -137,11 +140,32 @@ class MTFContextService
             $flags[] = 'htf_conflict';
         }
 
+        if ($alignment === 'conflict') {
+            $mtfScore += self::SOFT_CONFLICT_PENALTY;
+            $flags[] = 'mtf_conflict_soft';
+        }
+
+        $lowestTimeframe = $this->resolveLowestTimeframe($mtfResult->timeframeSignals);
+
+        if ($lowestTimeframe !== null) {
+            $entrySignal = $mtfResult->timeframeSignals[$lowestTimeframe] ?? null;
+            $entryScore = is_array($entrySignal) ? $this->resolveScore($entrySignal) : 0.0;
+
+            if ($entryScore >= 3.0) {
+                $mtfScore += 1.0;
+                $flags[] = 'entry_trigger_boost';
+            }
+        }
+
+        if (abs($mtfScore) >= 0.8 && abs($mtfScore) < 1.5) {
+            $flags[] = 'weak_signal_zone';
+        }
+
         return [
             'mtf_score' => round($mtfScore, 4),
             'direction' => $resolvedDirection,
             'mode' => $this->detectMode($mtfResult->timeframeSignals),
-            'alignment' => $this->resolveSignalAlignment($directionByTimeframe),
+            'alignment' => $alignment,
             'flags' => array_values(array_unique($flags)),
         ];
     }
@@ -214,11 +238,33 @@ class MTFContextService
      */
     private function configuredTimeframeWeights(): array
     {
+        $dynamicWeights = $this->configService->getTimeframeWeights();
+
+        if ($dynamicWeights !== []) {
+            return $dynamicWeights;
+        }
+
         try {
             return (array) config('trading.timeframe_weights', []);
         } catch (\Throwable) {
             return [];
         }
+    }
+
+    /**
+     * @param  array<string, array{timeframe: string, rsi: float, trend: string, mcp_score: int, signal_type: string}>  $signals
+     */
+    private function resolveLowestTimeframe(array $signals): ?string
+    {
+        if ($signals === []) {
+            return null;
+        }
+
+        $timeframes = array_keys($signals);
+
+        usort($timeframes, fn (string $a, string $b): int => $this->timeframeToMinutes($a) <=> $this->timeframeToMinutes($b));
+
+        return $timeframes[0] ?? null;
     }
 
     /**

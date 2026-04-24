@@ -13,6 +13,7 @@ use App\Services\Market\MarketContextPersistenceService;
 use App\Services\MCP\MCPService;
 use App\Services\Trading\DTO\AiDecisionDTO;
 use App\Services\Trading\DTO\IndicatorDTO;
+use App\Services\Trading\DTO\MTFContextDTO;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -38,6 +39,7 @@ class TradingCycleService
         private readonly MTFContextService $mtfContextService,
         private readonly MarketContextPersistenceService $marketContextPersistenceService,
         private readonly AiAdvisorService $aiAdvisorService,
+        private readonly SignalActivationService $signalActivationService,
         private readonly DecisionFusionService $decisionFusionService,
         private readonly GuardrailService $guardrailService,
         private readonly RiskService $riskService,
@@ -159,7 +161,7 @@ class TradingCycleService
             'mtf_score' => $mtfContext->mtfScore,
             'alignment' => $mtfContext->alignment,
             'bias' => $mtfContext->bias,
-            'timeframe_signals' => array_map(static fn($signal): array => $signal->toArray(), $timeframeSignals),
+            'timeframe_signals' => array_map(static fn ($signal): array => $signal->toArray(), $timeframeSignals),
         ]);
 
         if ($triggerMcpResult === null) {
@@ -221,7 +223,49 @@ class TradingCycleService
             reason: 'AI decision unavailable',
         );
 
-        $fusionOutcome = $this->decisionFusionService->fuseOutcomeDto($aiDecision, $mtfContext);
+        $activation = $this->signalActivationService->adjustFromConfig(
+            mtfScore: $mtfContext->mtfScore,
+            aiConfidence: $aiDecision->confidence,
+            flags: $mtfContext->flags,
+            executionId: $executionId,
+            coin: $coin,
+        );
+
+        $passesActivationThreshold = abs($activation['adjusted_score']) >= $activation['trigger_threshold']
+            || ($mtfContext->mode === 'trend_follow' && abs($activation['adjusted_score']) >= 0.5);
+
+        if ($passesActivationThreshold) {
+            Log::info('[SignalActivation] Triggered', [
+                'execution_id' => $executionId,
+                'coin' => $coin,
+                'mtf_score' => $activation['adjusted_score'],
+                'mode' => $mtfContext->mode,
+                'mcp_score' => $triggerMcpResult->score,
+                'confidence' => $activation['adjusted_confidence'],
+            ]);
+        }
+
+        $activatedMtfContext = new MTFContextDTO(
+            mtfScore: $activation['adjusted_score'],
+            direction: $mtfContext->direction,
+            mode: $mtfContext->mode,
+            alignment: $mtfContext->alignment,
+            bias: $mtfContext->bias,
+            timeframeSignals: $mtfContext->timeframeSignals,
+            flags: array_values(array_unique(array_merge(
+                $mtfContext->flags,
+                ["signal_activation_{$activation['mode']}"],
+            ))),
+        );
+
+        $activatedAiDecision = new AiDecisionDTO(
+            action: $aiDecision->action,
+            confidence: $activation['adjusted_confidence'],
+            reason: $aiDecision->reason,
+            validationFlags: $aiDecision->validationFlags,
+        );
+
+        $fusionOutcome = $this->decisionFusionService->fuseOutcomeDto($activatedAiDecision, $activatedMtfContext);
         $guardedDecision = $this->guardrailService->apply($fusionOutcome->decision, $entryIndicator);
 
         $guardrailAccepted = in_array($guardedDecision->action, ['BUY', 'SELL'], true);
@@ -303,7 +347,7 @@ class TradingCycleService
 
             $prices = $rows
                 ->pluck('price')
-                ->map(static fn(mixed $price): float => (float) $price)
+                ->map(static fn (mixed $price): float => (float) $price)
                 ->values()
                 ->all();
 

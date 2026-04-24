@@ -16,6 +16,7 @@ use App\Services\Trading\FinalSignalDTO;
 use App\Services\Trading\MTFContextService;
 use App\Services\Trading\MTFDecisionService;
 use App\Services\Trading\PositionSizingService;
+use App\Services\Trading\SignalActivationService;
 use App\Services\Trading\TradeLevelService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -77,6 +78,7 @@ class RunAiDecisionJob implements ShouldQueue
         PositionSizingService $positionSizingService,
         MTFDecisionService $mtfDecisionService,
         MarketContextPersistenceService $marketContextPersistenceService,
+        SignalActivationService $signalActivationService,
     ): void {
         Log::info('[RunAiDecisionJob] Execution started', [
             'execution_id' => $this->executionId,
@@ -98,6 +100,7 @@ class RunAiDecisionJob implements ShouldQueue
                     positionSizingService: $positionSizingService,
                     mtfDecisionService: $mtfDecisionService,
                     marketContextPersistenceService: $marketContextPersistenceService,
+                    signalActivationService: $signalActivationService,
                     coin: $coin,
                     timeframes: $timeframes,
                 );
@@ -132,6 +135,7 @@ class RunAiDecisionJob implements ShouldQueue
         PositionSizingService $positionSizingService,
         MTFDecisionService $mtfDecisionService,
         MarketContextPersistenceService $marketContextPersistenceService,
+        SignalActivationService $signalActivationService,
         string $coin,
         array $timeframes,
     ): void {
@@ -190,6 +194,37 @@ class RunAiDecisionJob implements ShouldQueue
             'flags' => ['ai_unavailable'],
         ];
 
+        $activation = $signalActivationService->adjustFromConfig(
+            mtfScore: (float) ($mtfContext['mtf_score'] ?? 0.0),
+            aiConfidence: (int) ($aiDecision['confidence'] ?? 0),
+            flags: (array) ($mtfContext['flags'] ?? []),
+            executionId: $this->executionId,
+            coin: $coin,
+        );
+
+        $mode = (string) ($mtfContext['mode'] ?? 'trend_follow');
+        $passesActivationThreshold = abs((float) $activation['adjusted_score']) >= (float) $activation['trigger_threshold']
+            || ($mode === 'trend_follow' && abs((float) $activation['adjusted_score']) >= 0.5);
+
+        if ($passesActivationThreshold) {
+            Log::info('[SignalActivation] Triggered', [
+                'execution_id' => $this->executionId,
+                'coin' => $coin,
+                'mtf_score' => $activation['adjusted_score'],
+                'mode' => $mode,
+                'mcp_score' => $triggerMcpResult->score,
+                'confidence' => $activation['adjusted_confidence'],
+            ]);
+        }
+
+        $mtfContext['mtf_score'] = $activation['adjusted_score'];
+        $mtfContext['flags'] = $this->normalizeFlags(array_merge(
+            (array) ($mtfContext['flags'] ?? []),
+            ["signal_activation_{$activation['mode']}"],
+        ));
+        $mtfContext['trigger_threshold'] = $activation['trigger_threshold'];
+        $aiDecision['confidence'] = $activation['adjusted_confidence'];
+
         $fusedDecision = $decisionFusionService->fuse($aiDecision, $mtfContext);
         $decision = $fusedDecision;
 
@@ -225,7 +260,7 @@ class RunAiDecisionJob implements ShouldQueue
             stopLoss: isset($decision['stop_loss']) ? (float) $decision['stop_loss'] : null,
             positionSize: isset($decision['position_size']) ? (float) $decision['position_size'] : null,
             flags: $this->normalizeFlags($decision['flags'] ?? []),
-            mtfScore: $mtfResult->mtfScore,
+            mtfScore: (float) ($fusedDecision['mtf_score'] ?? $mtfResult->mtfScore),
             mode: $mtfResult->mode,
         );
 
@@ -266,6 +301,7 @@ class RunAiDecisionJob implements ShouldQueue
                 'ai_action' => $fusedDecision['ai_action'] ?? null,
                 'ai_confidence' => $fusedDecision['ai_confidence'] ?? null,
                 'mtf_score' => $mtfResult->mtfScore,
+                'mtf_score_adjusted' => $fusedDecision['mtf_score'] ?? null,
                 'mtf_alignment' => $fusedDecision['mtf_alignment'] ?? null,
                 'mtf_context_bias' => $fusedDecision['context_bias'] ?? null,
                 'confidence_delta' => $fusedDecision['confidence_delta'] ?? 0,

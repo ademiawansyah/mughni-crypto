@@ -15,9 +15,9 @@ use Illuminate\Support\Facades\Log;
  * Combines AI recommendation with MTF context into a single final decision.
  *
  * Fusion tiers (based on abs(mtf_score)):
- *   ≥ 3.0  — Strong MTF: MTF direction overrides AI, confidence floored at 75.
- *   1.5–3  — Medium MTF: AI action primary; ±confidence adjusted by alignment.
- *   < 1.5  — Weak MTF: AI action primary; confidence reduced by 20 (low conviction).
+ *   ≥ 2.5  — Strong MTF: MTF direction overrides AI, confidence floored at 70.
+ *   1.0–2.5  — Medium MTF: AI action primary; ±confidence adjusted by MTF alignment.
+ *   < 1.0  — Weak MTF: AI action primary; confidence reduced by 10.
  *
  * Decision conflicts (AI action ≠ MTF direction) are always flagged explicitly.
  */
@@ -40,9 +40,10 @@ class DecisionFusionService
                 'mtf_score' => $mtfContext->mtfScore,
                 'alignment' => $mtfContext->alignment,
                 'context_bias' => $mtfContext->bias,
-                'mode' => 'trend_follow',
+                'mode' => $mtfContext->mode,
                 'base_confidence' => 50,
                 'flags' => $mtfContext->flags,
+                'trigger_threshold' => $this->resolveTriggerThresholdFromFlags($mtfContext->flags),
             ],
         );
 
@@ -88,7 +89,7 @@ class DecisionFusionService
      * tiers; MTF direction dominates in the strong tier.
      *
      * @param  array{action: string, confidence: int, risk_level: string, reason: string, flags?: array<int, string>}  $aiDecision
-     * @param  array{mtf_score: float, alignment: string, context_bias: string, mode: string, base_confidence: int, flags: array<int, string>}  $mtfContext
+     * @param  array{mtf_score: float, alignment: string, context_bias: string, mode: string, base_confidence: int, flags: array<int, string>, trigger_threshold?: float}  $mtfContext
      * @return array{
      *   action: string,
      *   confidence: int,
@@ -111,7 +112,10 @@ class DecisionFusionService
         $aiConfidence = max(0, min(100, (int) $aiDecision['confidence']));
 
         $mtfScore = (float) $mtfContext['mtf_score'];
+        $mtfAlignment = strtolower((string) ($mtfContext['alignment'] ?? 'mixed'));
         $contextBias = (string) $mtfContext['context_bias'];
+        $mode = strtolower((string) ($mtfContext['mode'] ?? 'trend_follow'));
+        $triggerThreshold = (float) ($mtfContext['trigger_threshold'] ?? 1.0);
         $absScore = abs($mtfScore);
 
         // Derive MTF direction from context bias (bullish → BUY, bearish → SELL)
@@ -135,37 +139,43 @@ class DecisionFusionService
         $finalConfidence = $aiConfidence;
         $confidenceDelta = 0;
 
-        if ($absScore >= 3.0) {
+        if ($absScore >= 2.5) {
             // Tier 1: Strong MTF — MTF direction is authoritative
             $finalAction = $mtfDirection !== 'HOLD' ? $mtfDirection : $aiAction;
-            $finalConfidence = max($aiConfidence, 75);
+            $finalConfidence = max($aiConfidence, 70);
             $confidenceDelta = $finalConfidence - $aiConfidence;
-            $flags[] = 'mtf_strong_dominant';
-        } elseif ($absScore >= 1.5) {
+            $flags[] = 'mtf_dominant';
+        } elseif ($absScore >= $triggerThreshold) {
             // Tier 2: Medium MTF — AI action primary, alignment-based adjustment
             $finalAction = $aiAction;
-            $alignment = $this->resolveAiAlignment($aiAction, $contextBias);
 
-            if ($alignment === 'aligned') {
+            if ($aiAction !== 'HOLD' && $mtfAlignment === 'aligned') {
                 $confidenceDelta = 10;
-            } elseif ($alignment === 'opposed') {
-                $confidenceDelta = -15;
+            } elseif ($aiAction !== 'HOLD' && $mtfAlignment === 'conflict') {
+                $confidenceDelta = -10;
             }
 
             $finalConfidence = max(0, min(100, $aiConfidence + $confidenceDelta));
-            $flags[] = "mtf_alignment_{$alignment}";
+            $flags[] = "mtf_alignment_{$mtfAlignment}";
         } else {
             // Tier 3: Weak MTF — AI action with reduced confidence
             $finalAction = $aiAction;
-            $confidenceDelta = -20;
+            $confidenceDelta = -10;
             $finalConfidence = max(0, min(100, $aiConfidence + $confidenceDelta));
-            $flags[] = 'mtf_weak_context';
+            $flags[] = 'mtf_weak';
+        }
+
+        if ($mode === 'trend_follow' && $absScore >= 0.5 && $finalAction === 'HOLD' && $mtfDirection !== 'HOLD') {
+            $finalAction = $mtfDirection;
+            $finalConfidence = max($finalConfidence, 45);
+            $confidenceDelta = $finalConfidence - $aiConfidence;
+            $flags[] = 'trend_follow_enable';
         }
 
         $flags[] = "mtf_confidence_delta_{$confidenceDelta}";
         $flags = $this->normalizeFlags($flags);
 
-        $mtfAlignment = $this->resolveAiAlignment($finalAction, $contextBias);
+        $resolvedFinalAlignment = $this->resolveAiAlignment($finalAction, $contextBias);
 
         Log::info('[DecisionFusionService] Decision computed', [
             'mtf_score' => $mtfScore,
@@ -185,12 +195,28 @@ class DecisionFusionService
             'ai_action' => $aiAction,
             'ai_confidence' => $aiConfidence,
             'mtf_score' => $mtfScore,
-            'mtf_alignment' => $mtfAlignment,
+            'mtf_alignment' => $resolvedFinalAlignment,
             'context_bias' => $contextBias,
             'confidence_delta' => $confidenceDelta,
             'confidence_adjusted' => $finalConfidence,
             'final_action' => $finalAction,
         ];
+    }
+
+    /**
+     * @param  array<int, string>  $flags
+     */
+    private function resolveTriggerThresholdFromFlags(array $flags): float
+    {
+        if (in_array('signal_activation_conservative', $flags, true)) {
+            return 1.5;
+        }
+
+        if (in_array('signal_activation_aggressive', $flags, true)) {
+            return 0.8;
+        }
+
+        return 0.8;
     }
 
     private function resolveAiAlignment(string $action, string $contextBias): string

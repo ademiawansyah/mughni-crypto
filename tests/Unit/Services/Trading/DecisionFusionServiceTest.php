@@ -3,24 +3,24 @@
 namespace Tests\Unit\Services\Trading;
 
 use App\Services\Trading\DecisionFusionService;
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 
 class DecisionFusionServiceTest extends TestCase
 {
-    public function test_it_boosts_confidence_when_ai_action_aligns_with_mtf_bias(): void
+    public function test_it_uses_mtf_direction_when_mtf_is_strong(): void
     {
         $service = new DecisionFusionService;
 
         $result = $service->fuse(
             [
-                'action' => 'BUY',
-                'confidence' => 65,
+                'action' => 'SELL',
+                'confidence' => 62,
                 'risk_level' => 'MEDIUM',
-                'reason' => 'ai buy',
+                'reason' => 'ai sell',
                 'flags' => [],
             ],
             [
-                'mtf_score' => 2.5,
+                'mtf_score' => 2.8,
                 'alignment' => 'aligned',
                 'context_bias' => 'bullish',
                 'mode' => 'trend_follow',
@@ -30,11 +30,12 @@ class DecisionFusionServiceTest extends TestCase
         );
 
         $this->assertSame('BUY', $result['action']);
-        $this->assertGreaterThan(65, $result['confidence']);
+        $this->assertSame(70, $result['confidence']);
+        $this->assertContains('mtf_dominant', $result['flags']);
         $this->assertSame('aligned', $result['mtf_alignment']);
     }
 
-    public function test_it_reduces_confidence_when_ai_action_opposes_mtf_bias(): void
+    public function test_it_balances_medium_mtf_and_penalizes_conflict(): void
     {
         $service = new DecisionFusionService;
 
@@ -46,8 +47,8 @@ class DecisionFusionServiceTest extends TestCase
                 'reason' => 'ai buy',
             ],
             [
-                'mtf_score' => -3.0,
-                'alignment' => 'contradictory',
+                'mtf_score' => 1.4,
+                'alignment' => 'conflict',
                 'context_bias' => 'bearish',
                 'mode' => 'reversal',
                 'base_confidence' => 55,
@@ -56,33 +57,34 @@ class DecisionFusionServiceTest extends TestCase
         );
 
         $this->assertSame('BUY', $result['action']);
-        $this->assertLessThan(70, $result['confidence']);
+        $this->assertSame(60, $result['confidence']);
         $this->assertSame('opposed', $result['mtf_alignment']);
     }
 
-    public function test_it_keeps_hold_confidence_unchanged(): void
+    public function test_it_marks_weak_mtf_and_reduces_confidence(): void
     {
         $service = new DecisionFusionService;
 
         $result = $service->fuse(
             [
-                'action' => 'HOLD',
+                'action' => 'SELL',
                 'confidence' => 52,
                 'risk_level' => 'MEDIUM',
-                'reason' => 'no edge',
+                'reason' => 'weak sell',
             ],
             [
-                'mtf_score' => 4.0,
-                'alignment' => 'aligned',
-                'context_bias' => 'bullish',
+                'mtf_score' => 0.7,
+                'alignment' => 'mixed',
+                'context_bias' => 'neutral',
                 'mode' => 'trend_follow',
                 'base_confidence' => 65,
                 'flags' => [],
             ],
         );
 
-        $this->assertSame('HOLD', $result['action']);
-        $this->assertSame(52, $result['confidence']);
-        $this->assertSame(0, $result['confidence_delta']);
+        $this->assertSame('SELL', $result['action']);
+        $this->assertSame(42, $result['confidence']);
+        $this->assertSame(-10, $result['confidence_delta']);
+        $this->assertContains('mtf_weak', $result['flags']);
     }
 }

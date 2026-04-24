@@ -386,7 +386,7 @@ class MCPService
     /**
      * Calculate the cumulative signal score for a candidate.
      *
-     * Scoring rules (micro-profit tuned, MIN_SCORE = 3):
+     * Scoring rules (micro-profit tuned, MIN_SCORE = 1):
      *   +2 — RSI in strong extreme zone (< 30 BUY or > 70 SELL)
      *   +1 — RSI in early zone (< 40 BUY or > 60 SELL)
      *   +2 — EMA trend aligns with candidate direction (UP for BUY, DOWN for SELL)
@@ -407,7 +407,7 @@ class MCPService
      *   Strong overbought + UP trend    → 2 + 2 = 4 (reversal)
      *
      * Maximum reachable score: 6 (strong RSI + trend/reversal + volume spike).
-     * Minimum to pass: 3 (see MIN_SCORE).
+     * Minimum to pass: 1 (see MIN_SCORE).
      *
      * NOTE: MACD scoring is deferred until a macd/macd_signal column is added
      * to market_indicators. EMA9 vs EMA21 crossover is already captured by the

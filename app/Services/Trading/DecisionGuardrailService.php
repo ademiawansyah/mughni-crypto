@@ -18,7 +18,7 @@ namespace App\Services\Trading;
  */
 class DecisionGuardrailService
 {
-    private const MIN_CONFIDENCE = 55;
+    private const MIN_CONFIDENCE = 45;
 
     /**
      * Apply guardrail checks to one fused decision.
@@ -39,7 +39,7 @@ class DecisionGuardrailService
             $decision['action'] = 'HOLD';
             $decision['confidence'] = 0;
             $decision['risk_level'] = 'HIGH';
-            $decision['reason'] = trim((string) $decision['reason']) . ' | guardrail:invalid_action';
+            $decision['reason'] = trim((string) $decision['reason']).' | guardrail:invalid_action';
             $decision['flags'][] = 'guardrail_invalid_action';
 
             return $this->finalize($decision);
@@ -50,7 +50,7 @@ class DecisionGuardrailService
             $decision['action'] = 'HOLD';
             $decision['confidence'] = 0;
             $decision['risk_level'] = 'HIGH';
-            $decision['reason'] = trim((string) $decision['reason']) . ' | guardrail:invalid_market_data';
+            $decision['reason'] = trim((string) $decision['reason']).' | guardrail:invalid_market_data';
             $decision['flags'][] = 'guardrail_invalid_market_data';
 
             return $this->finalize($decision);
@@ -59,7 +59,7 @@ class DecisionGuardrailService
         // Rule 3 — Low confidence hard block.
         if ($action !== 'HOLD' && $confidence < self::MIN_CONFIDENCE) {
             $decision['action'] = 'HOLD';
-            $decision['reason'] = trim((string) $decision['reason']) . ' | guardrail:low_confidence';
+            $decision['reason'] = trim((string) $decision['reason']).' | guardrail:low_confidence';
             $decision['flags'][] = 'guardrail_low_confidence';
         }
 

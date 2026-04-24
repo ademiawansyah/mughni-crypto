@@ -11,7 +11,7 @@ class DecisionGuardrailServiceTest extends TestCase
     {
         $service = new DecisionGuardrailService;
 
-        $result = $service->apply($this->decision('BUY', 54, 'weak confidence'), 25.0, 'DOWN');
+        $result = $service->apply($this->decision('BUY', 44, 'weak confidence'), 25.0, 'DOWN');
 
         $this->assertSame('HOLD', $result['action']);
         $this->assertStringContainsString('guardrail:low_confidence', $result['reason']);
