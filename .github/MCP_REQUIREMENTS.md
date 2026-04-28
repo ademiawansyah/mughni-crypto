@@ -1,38 +1,46 @@
-# MCP Architecture Extension — Requirements & Objectives
+# MCP Architecture Extension — Requirements and Objectives
 
-**Date**: April 28, 2026  
-**Status**: Planning Phase Complete → Ready for Implementation  
+Date: April 28, 2026
+Status: Planning baseline
+Source of truth: .github/system-spec.instructions.md
 
-## 🎯 OBJECTIVE
+## Cross-Reference Matrix
+| This document section | Canonical spec section |
+|---|---|
+| Objective | 1, 2 |
+| Mandatory Constraints | 2, 4.2, 13 |
+| MCP Definition | 4, 9 |
+| Data Scope | 3, 8 |
+| Execution Pattern | 4.1, 4.2, 9, 10.5 |
+| Success Criteria | 2, 4.3, 11, 12 |
 
-Extend existing system to introduce:
-1. **Shared Market Context Processor (MCP)** — Global market regime detection
-2. **3 parallel independent models** — Counter-Trend, Pre-Pump, Momentum  
-3. **Per-model AI interpretation** — Optional signal refinement
-4. **Per-model notifications** — Clear labeling
+## Objective
+Extend the system with a shared market context processor and keep three model services independent:
+- Counter Trend
+- Pre-Pump
+- Trend Momentum
 
-## ⚠️ MANDATORY CONSTRAINTS
+## Mandatory Constraints
 
-### DO NOT
-- ❌ Merge models at signal level
-- ❌ Centralize decision-making
-- ❌ Convert to auto-trading system
-- ❌ Have MCP calculate model-specific indicators
-- ❌ Run models sequentially
+### Do Not
+- Do not merge model outputs into a single combined signal list.
+- Do not convert the system into auto-trading.
+- Do not let MCP calculate model-specific indicators.
+- Do not run model jobs in a blocking sequential chain.
+- Do not call external APIs directly from model workers.
 
-### DO
-- ✅ Keep models completely independent
-- ✅ Make MCP shared, single source of truth
-- ✅ Make AI optional, per-model
-- ✅ Maintain execution_id traceability
-- ✅ Keep signal-only (no auto-execution)
-- ✅ Route model inputs through centralized data-fetcher + Redis cache
+### Must Do
+- Keep model services independent.
+- Keep the system signal-only.
+- Use one centralized data-fetcher service.
+- Use cache-first model execution (Redis or equivalent).
+- Preserve per-model Top 10 ranked outputs with component scores.
+- Preserve execution traceability across jobs and outputs.
 
-## 🧠 MCP DEFINITION
+## MCP Definition
+MCP is a global context service, independent from per-coin model logic.
 
-**What**: Global service determining market regime independent of coin/model
-
-**Output**: 
+### MCP Output Contract
 ```json
 {
   "market_regime": "TRENDING_UP|TRENDING_DOWN|RANGING|CHOPPY",
@@ -43,48 +51,33 @@ Extend existing system to introduce:
 }
 ```
 
-**Data Sources**:
-- BTC OHLCV (1H, 4H, 1D)
-- BTC RSI/EMA slope
-- Total market cap trend
-- Average ATR across top 10 coins
-- BTC dominance trend
-- CoinGecko + Binance + Coinalyze as public providers
+## Data Scope
+Public APIs only.
+- CoinGecko
+- Binance public endpoints
+- Coinalyze
+- Optional equivalent public providers
 
-**NOT MCP's Role**:
-- ❌ Calculate Model 1/2/3 indicators
-- ❌ Pre-filter by model logic
-- ❌ Make trading decisions
+## Execution Pattern
+- Data fetcher runs every 5 minutes and updates shared cache/history.
+- Market context is recalculated from shared data.
+- Coin universe is refreshed on schedule using volume and OI filters.
+- Counter Trend runs every 15 minutes.
+- Pre-Pump runs every 30 minutes.
+- Trend Momentum runs every 1 hour.
 
-## 🔄 EXECUTION FLOW
+## Success Criteria
 
-### Phase 1: Market Context (Every 5 min)
-- Fetch BTC OHLCV → Calculate regime → Persist Redis
+### Functional
+- Three independent Top 10 lists are produced.
+- Output schema is stable and model-labeled.
+- Derivatives remain confirmation signals, not primary triggers.
 
-### Phase 2: Coin Universe (Daily @00:00)
-- Filter by cap/volume/OI + exclude stablecoins → Cache Redis (24h)
+### Performance
+- Shared cache lowers external API pressure.
+- Model execution remains parallel and isolated.
 
-### Phase 3: Models PARALLEL (No blocking)
-- CounterTrendJob (15m) | PrePumpJob (30m) | MomentumJob (1h)
-- Each: Fetch candidates → Evaluate → Generate Top 10 → AI (opt) → Notify
-
-## ✅ SUCCESS CRITERIA
-
-**Functional**:
-- 3 independent Top 10 lists
-- Market regime broadcasts to all
-- AI optional per-model
-- Per-model notifications (labeled)
-- Full execution_id traceability
-
-**Performance**:
-- Parallel reduces latency
-- Independent job failure/retry
-- Redis caching (5m/24h TTL)
-- No direct external API calls from model workers
-
-**Code Quality**:
-- SRP maintained
-- Framework best practices (implementation-specific)
-- Comprehensive tests
-- Backtesting validation
+### Quality
+- Single responsibility boundaries are preserved.
+- Test coverage includes scoring, trigger gates, and threshold behavior.
+- No regression in output format or signal transparency.

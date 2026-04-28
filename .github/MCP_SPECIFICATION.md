@@ -1,154 +1,143 @@
-# Crypto Trading Strategy Specification
+# MCP Strategy Specification
 
-**Version**: 1.0  
-**Source**: [crypto_trading_strategy.md](../crypto_trading_strategy.md)
+Version: 1.0
+Source of truth: .github/system-spec.instructions.md
 
-## MODEL 1: COUNTER-TREND — Reversal Detection
+## Cross-Reference Matrix
+| This document section | Canonical spec section |
+|---|---|
+| Model 1: Counter Trend | 5, 10.2, 10.3, 10.4 |
+| Model 2: Pre-Pump | 6 |
+| Model 3: Trend Momentum | 7 |
+| Data Sources | 8 |
+| Coin Universe Constraints | 10.5 |
+| Output Requirements | 4.3, 11 |
 
-### Timeframes
-| Component | Timeframe |
-|-----------|-----------|
-| Structure | 1H / 4H |
-| Entry Confirmation | 15M |
-| Macro Context | 1D (optional) |
-
-### Scoring (Total: 100)
-| Component | Weight |
-|-----------|--------|
-| Liquidity Sweep | 30% |
-| Market Structure Shift (MSS) | 25% |
-| Open Interest (OI) | 15% |
-| CVD Divergence | 15% |
-| Funding Rate | 10% |
-| ATR Volatility | 5% |
-
-### Signal Logic
-
-**A. Price Action (Primary)**
-- Liquidity Sweep: Wick breaks level, close returns inside
-- MSS: Body close breaks structure (HH or LL)
-- FVG/Order Block: Last opposite candle before impulse
-
-**B. Derivatives (Confirmation)**
-- OI: Decreasing after sweep
-- Funding: Moving negative → neutral
-- CVD: Bullish divergence
-- ATR: Spike → stabilization
-
-### Action
-- UP sweep (wick up, close below) → **BUY**
-- DOWN sweep (wick down, close above) → **SELL**
-- Else → HOLD
-
----
-
-## MODEL 2: PRE-PUMP — Short Squeeze Detection
+## Model 1: Counter Trend
+Reversal detection using liquidity sweep and exhaustion confirmation.
 
 ### Timeframes
 | Component | Timeframe |
-|-----------|-----------|
-| Funding | Real-time |
-| OI | 1H |
-| ATR | 4H |
-| Entry | 15M–1H |
+|---|---|
+| Structure screening | 1H or 4H |
+| Entry confirmation | 15M |
+| Macro filter | 1D optional |
 
-### Scoring (Total: 100)
+### Core Logic
+Primary trigger sequence:
+- Liquidity sweep
+- MSS body-close confirmation
+- Retrace into FVG or Order Block area
+
+Derivatives confirmation:
+- OI declines or flattens after sweep
+- Funding moves from extreme negative toward neutral
+- CVD bullish divergence while price prints lower low
+- ATR spike then normalization
+
+### Scoring
 | Component | Weight |
-|-----------|--------|
-| Funding Extreme | 35% |
-| ATR Compression | 25% |
-| OI Expansion | 20% |
-| Relative Strength vs BTC | 10% |
-| CVD Momentum | 10% |
+|---|---|
+| Liquidity sweep | 30% |
+| MSS body break | 25% |
+| OI decline | 15% |
+| CVD divergence | 15% |
+| Funding normalization | 10% |
+| Volatility stabilization | 5% |
 
-### Signal Logic
-
-**A. Funding (Primary)**
-- Extreme negative: < -0.05%
-- Consistent: Last 3+ candles negative
-- Momentum: Becoming MORE negative
-
-**B. Compression + Expansion**
-- OI: Increasing during consolidation
-- ATR: < 80% of baseline (compression)
-- Price: At order block/POI
-- CVD: Positive slope
-
-**C. Momentum**
-- RS vs BTC: Outperforming
-- Volume: > 150% of 20MA
-
-### Action
-- All aligned → **BUY** (squeeze setup)
-- Funding easing → **SELL** or HOLD
-
----
-
-## MODEL 3: MOMENTUM — Trend Continuation
+## Model 2: Pre-Pump
+Short squeeze preparation detection.
 
 ### Timeframes
 | Component | Timeframe |
-|-----------|-----------|
-| EMA Filter | 4H / 1D |
-| MACD/RSI | 4H |
-| BOS | 1H–4H |
-| Entry | 15M |
+|---|---|
+| Funding screening | Real time or 8H |
+| OI expansion | 1H |
+| ATR compression | 4H |
+| Momentum context | 4H or 1D |
+| Entry timing | 1H or 15M |
 
-### Scoring (Total: 100)
+### Core Logic
+Primary filters:
+- Funding below -0.05% target
+- Funding negative for at least 3 periods
+
+Confirmation:
+- Relative strength vs BTC
+- Relative volume above baseline
+- OI expansion during consolidation
+- ATR compression vs historical baseline
+- Positive CVD slope
+
+### Scoring
 | Component | Weight |
-|-----------|--------|
-| EMA Structure | 25% |
-| MACD Momentum | 20% |
-| RSI Momentum | 15% |
-| Open Interest | 20% |
-| Break of Structure | 10% |
-| CVD Momentum | 10% |
+|---|---|
+| Extreme negative funding | 35% |
+| ATR compression | 25% |
+| OI expansion in sideways phase | 20% |
+| Relative strength vs BTC | 10% |
+| Positive CVD buying delta | 10% |
 
-### Signal Logic
+## Model 3: Trend Momentum
+Breakout continuation confirmation.
 
-**A. Trend Structure (Gate)**
-- Price > EMA50 > EMA200 (bullish) OR Price < EMA50 < EMA200 (bearish)
-- EMA slope positive/negative
-- EMA spread widening
-- Min 3 HH/LL confirmed
+### Timeframes
+| Component | Timeframe |
+|---|---|
+| EMA trend filter | 1D or 4H |
+| MACD and RSI synergy | 4H |
+| BOS | 4H or 1H |
+| OI and CVD confirmation | 1H |
+| Entry timing | 1H or 15M |
 
-**B. Momentum**
-- RSI: 50–65 (uptrend) or 35–50 (downtrend)
-- MACD: Histogram > signal AND > zero
-- MACD slope: Increasing
+### Core Logic
+Trend structure:
+- Close above EMA50 above EMA200 for bullish continuation
+- Widening EMA spread
+- Positive EMA slope
 
-**C. Confirmation**
-- Higher highs/lows (1H/4H)
-- OI: Rising with price
-- CVD: Positive slope
-- Volume: > 20MA
+Momentum:
+- RSI in healthy zone, generally 50-65
+- MACD line above signal and preferably above zero
+- Positive and increasing MACD histogram
 
-### Action
-- Bullish EMA + MACD bullish + RSI zone → **BUY**
-- Bearish EMA + MACD bearish + RSI zone → **SELL**
-- Else → HOLD
+Participation confirmation:
+- OI rises with price
+- CVD slope positive
+- Continued BOS behavior
 
----
+### Scoring
+| Component | Weight |
+|---|---|
+| EMA trend filter | 25% |
+| MACD strength | 20% |
+| RSI momentum | 15% |
+| OI expansion with price | 20% |
+| BOS continuity | 10% |
+| CVD consistency | 10% |
 
 ## Data Sources
+Public endpoints only.
 
 | Data | Provider | Endpoint |
-|------|----------|----------|
-| OHLCV | Binance | `/api/v3/klines` |
-| OHLCV | CoinGecko | `/coins/{id}/ohlc` |
-| OI | Binance | `/fapi/v1/openInterest` |
-| Funding | Binance | `/fapi/v1/fundingRate` |
-| Trades | Binance | `/fapi/v1/aggTrades` |
-| Market Data | CoinGecko | `/coins/markets` |
-| Derivatives aggregates | Coinalyze | Public API |
+|---|---|---|
+| OHLCV | Binance | /api/v3/klines |
+| OHLCV | CoinGecko | /coins/{id}/ohlc |
+| Open Interest | Binance Futures | /fapi/v1/openInterest |
+| OI history | Coinalyze | /futures/open-interest-history |
+| Funding rate | Binance Futures | /fapi/v1/fundingRate |
+| Funding rate | Bybit | /v5/market/funding/history |
+| Agg trades | Binance Futures | /fapi/v1/aggTrades |
+| Market cap and volume | CoinGecko | /coins/markets |
+| 24H price change | Binance | /api/v3/ticker/24hr |
 
----
+## Coin Universe Constraints
+- Prefer broad Binance futures universe coverage.
+- Min 24H volume above 5 million USD.
+- Min OI above 1 million USD.
+- Exclude stablecoin-like pairs.
 
-## Coin Universe Filters
-
-- Binance futures pairs only
-- Min market cap: $100M
-- Min volume (24h): $5M
-- Min OI: $1M
-- Exclude stablecoins
-- Result: ~50-100 candidates
+## Output Requirements
+- Top 10 per model.
+- Include total_score and component-level score details.
+- Keep output model-labeled and non-merged.
