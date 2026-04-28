@@ -58,7 +58,7 @@ class AIPromptService
      *   market_context: array{trend: string},
      *   indicators: array{rsi: float, ema_trend: string, macd_signal?: string, volume_ratio: float},
      *   price: array{current: float},
-     * }  $mcpData  Structured payload produced by MCPService
+     * }  $mcpData  Structured payload produced by SignalPreFilterService
      * @return string Fully constructed prompt ready for LM Studio
      *
      * @throws InvalidArgumentException When required fields are missing or malformed

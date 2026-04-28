@@ -1,5 +1,10 @@
 <?php
 
+use App\Jobs\CounterTrendJob;
+use App\Jobs\MarketRegimeJob;
+use App\Jobs\MomentumJob;
+use App\Jobs\PrePumpJob;
+use App\Jobs\UpdateCoinUniverseJob;
 use App\Services\Notification\NotificationService;
 use App\Services\Trading\TradingCycleService;
 use Illuminate\Foundation\Inspiring;
@@ -62,3 +67,8 @@ Artisan::command('notification:test-telegram {--chat_id=} {--bot=} {--action=BUY
 })->purpose('Send a test Telegram trade signal notification');
 
 Schedule::command('trading:run-cycle')->everyFiveMinutes()->withoutOverlapping();
+Schedule::job(new MarketRegimeJob)->everyFiveMinutes()->withoutOverlapping();
+Schedule::job(new UpdateCoinUniverseJob)->dailyAt('00:00')->withoutOverlapping();
+Schedule::job(new CounterTrendJob)->everyFifteenMinutes()->withoutOverlapping();
+Schedule::job(new PrePumpJob)->everyThirtyMinutes()->withoutOverlapping();
+Schedule::job(new MomentumJob)->hourly()->withoutOverlapping();

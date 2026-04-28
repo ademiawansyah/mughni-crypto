@@ -10,8 +10,6 @@ use App\Services\Market\CandleBuilderService;
 use App\Services\Market\CandlePersistenceService;
 use App\Services\Market\FetchMarketDataService;
 use App\Services\Market\MarketContextPersistenceService;
-use App\Services\MCP\McpResult;
-use App\Services\MCP\MCPService;
 use App\Services\Trading\DTO\IndicatorDTO;
 use App\Services\Trading\DTO\MTFContextDTO;
 use Carbon\CarbonImmutable;
@@ -35,7 +33,7 @@ class TradingCycleService
         private readonly CandleBuilderService $candleBuilderService,
         private readonly CandlePersistenceService $candlePersistenceService,
         private readonly IndicatorService $indicatorService,
-        private readonly MCPService $mcpService,
+        private readonly SignalPreFilterService $mcpService,
         private readonly MTFContextService $mtfContextService,
         private readonly MarketContextPersistenceService $marketContextPersistenceService,
         private readonly AiAdvisorService $aiAdvisorService,

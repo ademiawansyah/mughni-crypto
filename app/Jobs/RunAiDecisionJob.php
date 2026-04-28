@@ -7,8 +7,6 @@ use App\Models\GeneralConfig;
 use App\Models\MarketIndicator;
 use App\Services\AI\AiAdvisorService;
 use App\Services\Market\MarketContextPersistenceService;
-use App\Services\MCP\McpResult;
-use App\Services\MCP\MCPService;
 use App\Services\Notification\NotificationService;
 use App\Services\Trading\DecisionFusionService;
 use App\Services\Trading\DecisionGuardrailService;
@@ -17,6 +15,8 @@ use App\Services\Trading\MTFContextService;
 use App\Services\Trading\MTFDecisionService;
 use App\Services\Trading\PositionSizingService;
 use App\Services\Trading\SignalActivationService;
+use App\Services\Trading\SignalPreFilterResult;
+use App\Services\Trading\SignalPreFilterService;
 use App\Services\Trading\TradeLevelService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -70,7 +70,7 @@ class RunAiDecisionJob implements ShouldQueue
     public function handle(
         AiAdvisorService $advisorService,
         NotificationService $notificationService,
-        MCPService $mcpService,
+        SignalPreFilterService $mcpService,
         DecisionGuardrailService $guardrailService,
         DecisionFusionService $decisionFusionService,
         MTFContextService $mtfContextService,
@@ -127,7 +127,7 @@ class RunAiDecisionJob implements ShouldQueue
     private function processCoin(
         AiAdvisorService $advisorService,
         NotificationService $notificationService,
-        MCPService $mcpService,
+        SignalPreFilterService $mcpService,
         DecisionGuardrailService $guardrailService,
         DecisionFusionService $decisionFusionService,
         MTFContextService $mtfContextService,
@@ -139,7 +139,7 @@ class RunAiDecisionJob implements ShouldQueue
         string $coin,
         array $timeframes,
     ): void {
-        /** @var array<string, McpResult|null> $mcpResults */
+        /** @var array<string, SignalPreFilterResult|null> $mcpResults */
         $mcpResults = [];
 
         foreach ($timeframes as $timeframe) {
