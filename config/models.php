@@ -45,6 +45,10 @@ return [
         'max_drawdown_tolerance' => 0.08, // 8%
         'position_size_adjustment' => 0.8, // 80% of base size
 
+        // AI Layer Configuration
+        'ai_enabled' => false,  // Enable per-model AI refinement
+        'notification_threshold' => 70,  // Confidence threshold for notifications
+
         // Job schedule: every 15 minutes
         'job_schedule' => '*/15 * * * *',
     ],
@@ -80,6 +84,10 @@ return [
         // Risk parameters
         'max_drawdown_tolerance' => 0.10, // 10%
         'position_size_adjustment' => 1.0, // Full position size (high confidence)
+
+        // AI Layer Configuration
+        'ai_enabled' => false,  // Enable per-model AI refinement
+        'notification_threshold' => 75,  // Confidence threshold for notifications
 
         // Job schedule: every 30 minutes
         'job_schedule' => '*/30 * * * *',
@@ -117,6 +125,10 @@ return [
         // Risk parameters
         'max_drawdown_tolerance' => 0.07, // 7%
         'position_size_adjustment' => 0.9, // 90% of base size
+
+        // AI Layer Configuration
+        'ai_enabled' => false,  // Enable per-model AI refinement
+        'notification_threshold' => 65,  // Confidence threshold for notifications
 
         // Job schedule: every 1 hour
         'job_schedule' => '0 * * * *',

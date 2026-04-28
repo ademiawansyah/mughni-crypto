@@ -18,6 +18,9 @@ class AiDecision extends Model
     protected $fillable = [
         'execution_id',
         'coin',
+        'model',
+        'market_regime',
+        'ai_decision',
         'timeframe',
         'trigger_timeframe',
         'trigger_score',
@@ -54,6 +57,8 @@ class AiDecision extends Model
         return [
             'input_data' => 'array',
             'raw_response' => 'array',
+            'market_regime' => 'array',
+            'ai_decision' => 'array',
             'is_trade_candidate' => 'boolean',
             'ai_used' => 'boolean',
             'ai_agreement' => 'boolean',
