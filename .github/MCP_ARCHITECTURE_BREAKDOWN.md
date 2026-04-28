@@ -4,6 +4,8 @@
 
 ## Current System Architecture
 
+This section is a legacy snapshot from discovery. Canonical design rules are defined in `.github/system-spec.instructions.md`.
+
 ### Services Existing
 | Service | Purpose | Location |
 |---------|---------|----------|
@@ -15,22 +17,22 @@
 
 ### Job Pipeline
 ```
-FetchMarketJob 
-  → ProcessIndicatorJob 
-  → RunAiDecisionJob 
-  → EvaluateAiDecisionJob
+data-fetcher
+  → market context update (5m)
+  → coin universe refresh (daily)
+  → model jobs in parallel (15m / 30m / 1h)
 ```
 
 ### Key Models
 - **MarketRaw**: Unaltered API responses (audit trail)
 - **MarketIndicator**: Technical data (RSI, EMA, ATR, etc.)
-- **AiDecision**: Trading decisions (action, confidence, reason)
+- **AiDecision**: Signal decisions (action, confidence, reason)
 - **MarketContext**: MTF context persistence
 
 ### Execution Properties
 - **Execution ID**: UUID traces entire pipeline run
-- **Timeframes**: 5m, 15m, 30m, 60m
-- **Role timeframes**: Trigger, Setup, Context (weighted)
+- **Model windows**: Entry 15M, structure/setup 1H/4H, macro 1D (optional)
+- **Execution mode**: Signal-only (no auto-trading)
 
 ---
 
@@ -47,9 +49,9 @@ FetchMarketJob
 - Recommendation: Rename MCPService → SignalPreFilterService
 
 ### Finding 3: Sequential Execution
-- Current: Jobs chain sequentially (blocking)
-- Models not independent
-- Recommendation: Parallel job execution
+- Current snapshot had sequential dependencies
+- Canonical target requires independent parallel model jobs
+- Recommendation: Keep model workers parallel and non-blocking
 
 ### Finding 4: AI Already Integrated
 - AI used as MTF refinement layer
@@ -64,7 +66,7 @@ FetchMarketJob
 |--------|---------|--------|-----|
 | Market Context | Per-coin/TF | Global (BTC regime) | Add MarketRegimeService |
 | Models | Implicit | Explicit (3 services) | Create Model services |
-| Execution | Sequential | Parallel | Separate job queues |
+| Execution | Mixed/legacy | Parallel | Separate job queues |
 | AI Role | MTF refinement | Per-model interpretation | Extend AI layer |
 | Notifications | Single stream | Per-model labeled | Add model field |
 
@@ -85,12 +87,16 @@ FetchMarketJob
 ## Service Responsibilities (SRP)
 
 ```
+DataFetcherService (public APIs only)
+  ↓ (store raw + cache normalized data)
 MarketRegimeService
   ↓ (output: market_context to Redis)
+CoinUniverseService
+  ↓
   ├─ CounterTrendModelService
   ├─ PrePumpModelService
   └─ MomentumModelService
-       ↓ (each fetches market_context)
+       ↓ (read cache; no direct external API calls)
        ├─ Optional: Per-model AI Layer
        └─ Per-model NotificationService
 ```
@@ -100,14 +106,15 @@ MarketRegimeService
 ## Data Flow
 
 ```
-Raw Data (Binance/CoinGecko)
+Raw Data (CoinGecko/Binance/Coinalyze)
   ↓
-FetchMarketDataService
+DataFetcherService
   ├─ Store to market_raw (unaltered)
   ├─ Build candles
   └─ Calculate indicators
        ↓
   ├─ MarketRegimeService (global context)
+  ├─ CoinUniverseService (cap/volume/OI filter)
   ├─ CounterTrendJob (Model 1)
   ├─ PrePumpJob (Model 2)
   └─ MomentumJob (Model 3)
@@ -115,5 +122,5 @@ FetchMarketDataService
   ├─ Per-model AI (optional)
   └─ Per-model Notifications
        ↓
-  SignalPersistenceService (ai_decisions table)
+  SignalPersistenceService (signal-only output)
 ```

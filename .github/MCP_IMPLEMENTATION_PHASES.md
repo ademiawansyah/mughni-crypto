@@ -3,6 +3,8 @@
 **Timeline**: 8 weeks (Phases 1-4)  
 **Current Status**: Phase 1 — Ready to Start
 
+**Source of Truth**: `.github/system-spec.instructions.md` is authoritative for system design. If this plan conflicts with that document, the system spec wins.
+
 ---
 
 ## PHASE 1: Foundation (Weeks 1-2)
@@ -62,8 +64,12 @@
 - **Filters**:
   - Market cap > $100M
   - Volume (24h) > $5M
+  - Open Interest > $1M
   - No stablecoins
   - Max 100 coins
+
+- **Data sources**:
+  - CoinGecko, Binance, Coinalyze (public APIs only)
 
 - **Output**: Redis key `coin_universe:main` (TTL: 86400s)
 
@@ -90,12 +96,12 @@
 - **Verification**: All config values accessible via `config('models.*')`
 
 ### Phase 1 Deliverables:
-- ✅ MCPService renamed → SignalPreFilterService
-- ✅ MarketRegimeService complete + tested
-- ✅ CoinUniverseService complete + tested
-- ✅ Both services job-enabled + scheduled
-- ✅ config/models.php complete
-- ✅ All unit/integration tests passing
+- [ ] MCPService renamed → SignalPreFilterService
+- [ ] MarketRegimeService complete + tested
+- [ ] CoinUniverseService complete + tested
+- [ ] Both services job-enabled + scheduled
+- [ ] config/models.php complete
+- [ ] All unit/integration tests passing
 
 ---
 
@@ -143,13 +149,14 @@
 ### Task 2.7: Register Job Scheduling
 - Update `app/Console/Kernel.php` to schedule all jobs
 - Jobs must run in PARALLEL (not chained)
+- Models must read from centralized data-fetcher/Redis cache, not call external APIs directly
 
 ### Phase 2 Verification:
-- ✅ Unit tests: Each model scoring logic
-- ✅ Integration tests: Model evaluation on sample data
-- ✅ Manual tests: Live data verification
-- ✅ Jobs scheduled correctly
-- ✅ Jobs can run independently
+- [ ] Unit tests: Each model scoring logic
+- [ ] Integration tests: Model evaluation on sample data
+- [ ] Manual tests: Live data verification
+- [ ] Jobs scheduled correctly
+- [ ] Jobs can run independently
 
 ---
 
@@ -220,11 +227,11 @@
 - Update MomentumJob: Same
 
 ### Phase 3 Verification:
-- ✅ Unit tests: AI confidence adjustment logic
-- ✅ Unit tests: Notification formatting
-- ✅ Integration tests: End-to-end job → notification
-- ✅ Manual tests: Telegram message format
-- ✅ AI layer enabled/disabled correctly
+- [ ] Unit tests: AI confidence adjustment logic
+- [ ] Unit tests: Notification formatting
+- [ ] Integration tests: End-to-end job → notification
+- [ ] Manual tests: Telegram message format
+- [ ] AI layer enabled/disabled correctly
 
 ---
 
@@ -285,32 +292,33 @@
 - Strategy implementation notes (mapping spec → code)
 
 ### Phase 4 Deliverables:
-- ✅ Filament dashboard updated
-- ✅ Unit tests: 90%+ coverage
-- ✅ Integration tests: Full pipeline validated
-- ✅ Manual testing: Live data verified
-- ✅ Backtesting: 30-day history generated
-- ✅ Documentation: Complete and actionable
+- [ ] Filament dashboard updated
+- [ ] Unit tests: 90%+ coverage
+- [ ] Integration tests: Full pipeline validated
+- [ ] Manual testing: Live data verified
+- [ ] Backtesting: 30-day history generated
+- [ ] Documentation: Complete and actionable
 
 ---
 
 ## Success Metrics (All Phases)
 
 ### Functional
-- ✅ 3 models generate independent Top 10 lists
-- ✅ Market regime broadcasts every 5 min
-- ✅ AI layer optional, can be toggled per model
-- ✅ Per-model notifications with clear labeling
-- ✅ Full execution_id traceability
+- [ ] 3 models generate independent Top 10 lists
+- [ ] Market regime broadcasts every 5 min
+- [ ] AI layer optional, can be toggled per model
+- [ ] Per-model notifications with clear labeling
+- [ ] Full execution_id traceability
 
 ### Performance
-- ✅ Parallel jobs (15m, 30m, 1h) reduce latency
-- ✅ Independent job failure/retry possible
-- ✅ Market regime Redis cache (5m)
-- ✅ Coin universe Redis cache (24h)
+- [ ] Parallel jobs (15m, 30m, 1h) reduce latency
+- [ ] Independent job failure/retry possible
+- [ ] Market regime Redis cache (5m)
+- [ ] Coin universe Redis cache (24h)
+- [ ] No direct model-to-external API calls
 
 ### Quality
-- ✅ SRP maintained (each service = 1 responsibility)
-- ✅ Laravel best practices followed
-- ✅ 90%+ test coverage
-- ✅ No breaking changes to existing system
+- [ ] SRP maintained (each service = 1 responsibility)
+- [ ] Framework best practices followed
+- [ ] 90%+ test coverage
+- [ ] No breaking changes to existing system

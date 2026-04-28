@@ -5,7 +5,7 @@
 
 ## 🎯 OBJECTIVE
 
-Extend existing Laravel system to introduce:
+Extend existing system to introduce:
 1. **Shared Market Context Processor (MCP)** — Global market regime detection
 2. **3 parallel independent models** — Counter-Trend, Pre-Pump, Momentum  
 3. **Per-model AI interpretation** — Optional signal refinement
@@ -26,6 +26,7 @@ Extend existing Laravel system to introduce:
 - ✅ Make AI optional, per-model
 - ✅ Maintain execution_id traceability
 - ✅ Keep signal-only (no auto-execution)
+- ✅ Route model inputs through centralized data-fetcher + Redis cache
 
 ## 🧠 MCP DEFINITION
 
@@ -48,6 +49,7 @@ Extend existing Laravel system to introduce:
 - Total market cap trend
 - Average ATR across top 10 coins
 - BTC dominance trend
+- CoinGecko + Binance + Coinalyze as public providers
 
 **NOT MCP's Role**:
 - ❌ Calculate Model 1/2/3 indicators
@@ -60,7 +62,7 @@ Extend existing Laravel system to introduce:
 - Fetch BTC OHLCV → Calculate regime → Persist Redis
 
 ### Phase 2: Coin Universe (Daily @00:00)
-- Filter by cap/volume → Cache Redis (24h)
+- Filter by cap/volume/OI + exclude stablecoins → Cache Redis (24h)
 
 ### Phase 3: Models PARALLEL (No blocking)
 - CounterTrendJob (15m) | PrePumpJob (30m) | MomentumJob (1h)
@@ -79,9 +81,10 @@ Extend existing Laravel system to introduce:
 - Parallel reduces latency
 - Independent job failure/retry
 - Redis caching (5m/24h TTL)
+- No direct external API calls from model workers
 
 **Code Quality**:
 - SRP maintained
-- Laravel best practices
+- Framework best practices (implementation-specific)
 - Comprehensive tests
 - Backtesting validation

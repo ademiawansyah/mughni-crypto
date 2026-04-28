@@ -10,7 +10,7 @@
 |-----------|-----------|
 | Structure | 1H / 4H |
 | Entry Confirmation | 15M |
-| Macro Context | 1D |
+| Macro Context | 1D (optional) |
 
 ### Scoring (Total: 100)
 | Component | Weight |
@@ -134,11 +134,13 @@
 
 | Data | Provider | Endpoint |
 |------|----------|----------|
-| OHLCV | Binance | `/fapi/v1/klines` |
+| OHLCV | Binance | `/api/v3/klines` |
+| OHLCV | CoinGecko | `/coins/{id}/ohlc` |
 | OI | Binance | `/fapi/v1/openInterest` |
 | Funding | Binance | `/fapi/v1/fundingRate` |
 | Trades | Binance | `/fapi/v1/aggTrades` |
 | Market Data | CoinGecko | `/coins/markets` |
+| Derivatives aggregates | Coinalyze | Public API |
 
 ---
 
@@ -147,5 +149,6 @@
 - Binance futures pairs only
 - Min market cap: $100M
 - Min volume (24h): $5M
+- Min OI: $1M
 - Exclude stablecoins
 - Result: ~50-100 candidates
