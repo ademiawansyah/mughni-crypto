@@ -21,6 +21,12 @@ class GeneralConfig extends Model
 {
     private const TRUE_VALUES = ['1', 'true', 'yes', 'on'];
 
+    /** @var array<int, string> */
+    private const DEFAULT_COINS = ['bitcoin', 'ethereum', 'solana'];
+
+    /** @var array<int, string> */
+    private const DEFAULT_TIMEFRAMES = ['5m', '15m', '1h', '4h'];
+
     protected $table = 'general_config';
 
     protected $fillable = ['key', 'value'];
@@ -75,7 +81,14 @@ class GeneralConfig extends Model
      */
     public static function getWatchlistCoins(): array
     {
-        return static::getArray('coins', []);
+        $coins = static::getArray('coins', self::DEFAULT_COINS);
+
+        $normalized = array_values(array_unique(array_filter(array_map(
+            static fn (string $coin): string => strtolower(trim($coin)),
+            $coins,
+        ))));
+
+        return $normalized === [] ? self::DEFAULT_COINS : $normalized;
     }
 
     /**
@@ -95,7 +108,14 @@ class GeneralConfig extends Model
      */
     public static function getTimeframes(): array
     {
-        return static::getArray('timeframes', []);
+        $timeframes = static::getArray('timeframes', self::DEFAULT_TIMEFRAMES);
+
+        $normalized = array_values(array_unique(array_filter(array_map(
+            static fn (string $timeframe): string => strtolower(trim($timeframe)),
+            $timeframes,
+        ), static fn (string $timeframe): bool => preg_match('/^\d+(m|h)$/', $timeframe) === 1)));
+
+        return $normalized === [] ? self::DEFAULT_TIMEFRAMES : $normalized;
     }
 
     /**

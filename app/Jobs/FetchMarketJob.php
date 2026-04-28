@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\GeneralConfig;
+use App\Services\Market\CoinUniverseService;
 use App\Services\Market\MarketDataService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -45,8 +46,10 @@ class FetchMarketJob implements ShouldQueue
      *
      * Runs one complete MTF pipeline cycle and dispatches downstream jobs.
      */
-    public function handle(MarketDataService $marketDataService): void
-    {
+    public function handle(
+        MarketDataService $marketDataService,
+        CoinUniverseService $coinUniverseService,
+    ): void {
         $executionId = (string) Str::uuid();
 
         Log::info('[FetchMarketJob] Execution started', [
@@ -61,9 +64,16 @@ class FetchMarketJob implements ShouldQueue
             return;
         }
 
-        /** @var array<string> $coins */
-        $coins = GeneralConfig::getCoins();
+        $coins = $this->resolveCoins($coinUniverseService);
         $timeframes = $this->resolveSortedTimeframes();
+
+        if ($coins === []) {
+            Log::warning('[FetchMarketJob] No configured coins available, skipping execution', [
+                'execution_id' => $executionId,
+            ]);
+
+            return;
+        }
 
         if ($timeframes === []) {
             Log::warning('[FetchMarketJob] No valid timeframe configured, skipping execution', [
@@ -89,6 +99,35 @@ class FetchMarketJob implements ShouldQueue
     }
 
     /**
+     * Resolve candidate coins for ingestion.
+     *
+     * Priority:
+     * 1. Cached dynamic universe from UpdateCoinUniverseJob.
+     * 2. GeneralConfig coins fallback.
+     *
+     * @return array<string>
+     */
+    private function resolveCoins(CoinUniverseService $coinUniverseService): array
+    {
+        /** @var array<int, array{coin?: string}> $cachedUniverse */
+        $cachedUniverse = $coinUniverseService->getCachedUniverse();
+
+        $coins = array_values(array_filter(array_map(
+            static fn (array $entry): string => trim((string) ($entry['coin'] ?? '')),
+            $cachedUniverse,
+        )));
+
+        if ($coins === []) {
+            /** @var array<string> $fallbackCoins */
+            $fallbackCoins = GeneralConfig::getCoins();
+
+            return array_values(array_unique(array_filter($fallbackCoins, fn (string $coin): bool => trim($coin) !== '')));
+        }
+
+        return array_values(array_unique($coins));
+    }
+
+    /**
      * @return array<string>
      */
     private function resolveSortedTimeframes(): array
@@ -96,9 +135,9 @@ class FetchMarketJob implements ShouldQueue
         $timeframes = GeneralConfig::getTimeframes();
         $unique = array_values(array_unique($timeframes));
 
-        usort($unique, fn(string $a, string $b): int => $this->timeframeToMinutes($a) <=> $this->timeframeToMinutes($b));
+        usort($unique, fn (string $a, string $b): int => $this->timeframeToMinutes($a) <=> $this->timeframeToMinutes($b));
 
-        return array_values(array_filter($unique, fn(string $timeframe): bool => $this->timeframeToMinutes($timeframe) !== PHP_INT_MAX));
+        return array_values(array_filter($unique, fn (string $timeframe): bool => $this->timeframeToMinutes($timeframe) !== PHP_INT_MAX));
     }
 
     private function timeframeToMinutes(string $timeframe): int

@@ -14,10 +14,10 @@ class MomentumModelService extends AbstractMarketModelService
     public function evaluateCoin(string $coin, ?array $indicators = null): ?ModelSignalDTO
     {
         $resolvedIndicators = $indicators ?? $this->resolveIndicators($coin);
-        $entry = $resolvedIndicators['15m'] ?? null;
-        $setup = $resolvedIndicators['1h'] ?? null;
-        $macro = $resolvedIndicators['4h'] ?? null;
-        $context = $resolvedIndicators['1d'] ?? null;
+        $entry = $resolvedIndicators['5m'] ?? null;
+        $setup = $resolvedIndicators['10m'] ?? null;
+        $macro = $resolvedIndicators['15m'] ?? null;
+        $context = $resolvedIndicators['15m'] ?? null;
 
         if ($entry === null || $setup === null || $macro === null || $context === null) {
             return null;
@@ -35,7 +35,7 @@ class MomentumModelService extends AbstractMarketModelService
         $marketRegime = $this->resolveMarketRegime();
         $regimeAdjuster = (int) config(sprintf('models.momentum.market_confidence_adjusters.%s', $marketRegime['market_regime'] ?? 'RANGING'), 0);
         $score = $this->clampInt($baseScore + $regimeAdjuster);
-        $minimumScore = (int) config('models.momentum.min_score', 55);
+        $minimumScore = (int) config('models.momentum.min_score_short_tf', 45);
 
         if ($score < $minimumScore) {
             return null;
@@ -46,7 +46,7 @@ class MomentumModelService extends AbstractMarketModelService
             coin: $coin,
             action: $action,
             score: $score,
-            primaryTimeframe: '4h',
+            primaryTimeframe: '15m',
             componentScores: $componentScores,
             context: [
                 'market_regime' => $marketRegime['market_regime'] ?? 'RANGING',
@@ -73,9 +73,9 @@ class MomentumModelService extends AbstractMarketModelService
      */
     public function calculateComponentScores(array $indicators): array
     {
-        $setup = $indicators['1h'] ?? [];
-        $macro = $indicators['4h'] ?? [];
-        $context = $indicators['1d'] ?? [];
+        $setup = $indicators['10m'] ?? [];
+        $macro = $indicators['15m'] ?? [];
+        $context = $indicators['15m'] ?? [];
         $macroTrend = (string) ($macro['trend'] ?? 'sideways');
         $contextTrend = (string) ($context['trend'] ?? 'sideways');
         $macroRsi = is_numeric($macro['rsi'] ?? null) ? (float) $macro['rsi'] : 50.0;
@@ -108,11 +108,11 @@ class MomentumModelService extends AbstractMarketModelService
 
         return [
             'ema' => $emaScore,
-            'macd' => 0.0,
+            'macd' => 0.5,
             'rsi' => $rsiScore,
             'oi' => $volumeRatio >= 1.5 ? 1.0 : ($volumeRatio >= 1.2 ? 0.6 : 0.0),
             'bos' => $this->detectBreakOfStructure($indicators) ? 1.0 : 0.0,
-            'cvd' => 0.0,
+            'cvd' => 0.5,
         ];
     }
 
@@ -123,19 +123,20 @@ class MomentumModelService extends AbstractMarketModelService
      */
     public function detectBreakOfStructure(array $indicators): bool
     {
-        $entryTrend = $indicators['15m']['trend'] ?? null;
-        $setupTrend = $indicators['1h']['trend'] ?? null;
-        $macroTrend = $indicators['4h']['trend'] ?? null;
-        $contextTrend = $indicators['1d']['trend'] ?? null;
+        $entryTrend = $indicators['5m']['trend'] ?? null;
+        $setupTrend = $indicators['10m']['trend'] ?? null;
+        $macroTrend = $indicators['15m']['trend'] ?? null;
 
-        if (! is_string($entryTrend) || ! is_string($setupTrend) || ! is_string($macroTrend) || ! is_string($contextTrend)) {
+        if (! is_string($entryTrend) || ! is_string($setupTrend) || ! is_string($macroTrend)) {
             return false;
         }
 
-        return $entryTrend !== 'sideways'
-            && $entryTrend === $setupTrend
-            && $setupTrend === $macroTrend
-            && $macroTrend === $contextTrend;
+        if ($macroTrend === 'sideways') {
+            return false;
+        }
+
+        return ($entryTrend !== 'sideways' && $entryTrend === $setupTrend && $setupTrend === $macroTrend)
+            || ($setupTrend !== 'sideways' && $setupTrend === $macroTrend);
     }
 
     /**
@@ -145,16 +146,16 @@ class MomentumModelService extends AbstractMarketModelService
      */
     public function determineAction(array $indicators): string
     {
-        $macro = $indicators['4h'] ?? [];
+        $macro = $indicators['15m'] ?? [];
         $macroTrend = (string) ($macro['trend'] ?? 'sideways');
         $macroRsi = is_numeric($macro['rsi'] ?? null) ? (float) $macro['rsi'] : 50.0;
 
         if ($this->detectBreakOfStructure($indicators)) {
-            if ($this->bullishTrend($macroTrend) && $macroRsi >= 50.0 && $macroRsi <= 65.0) {
+            if ($this->bullishTrend($macroTrend) && $macroRsi >= 45.0 && $macroRsi <= 72.0) {
                 return 'BUY';
             }
 
-            if ($this->bearishTrend($macroTrend) && $macroRsi >= 35.0 && $macroRsi <= 50.0) {
+            if ($this->bearishTrend($macroTrend) && $macroRsi >= 28.0 && $macroRsi <= 55.0) {
                 return 'SELL';
             }
         }
@@ -179,7 +180,7 @@ class MomentumModelService extends AbstractMarketModelService
      */
     protected function requiredTimeframes(): array
     {
-        return ['15m', '1h', '4h', '1d'];
+        return ['5m', '10m', '15m'];
     }
 
     protected function modelKey(): string

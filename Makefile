@@ -55,6 +55,9 @@ cron-run-all:
 	docker exec -it al_mughni php artisan route:clear
 	docker exec -it al_mughni php artisan view:clear
 
+clean-redis:
+	docker exec -it al_mughni redis-cli FLUSHALL
+
 redis-flush:
 	docker exec -it al_mughni php artisan queue:flush
 	docker exec -it fotoria php artisan queue:prune-failed

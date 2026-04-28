@@ -98,6 +98,23 @@ class CoinUniverseService
     {
         $coins = $this->fetchAndFilterCoins();
 
+        if ($coins === []) {
+            $existingUniverse = $this->getCachedUniverse();
+
+            if ($existingUniverse !== []) {
+                Log::warning('[CoinUniverseService] Universe refresh returned empty, preserving previous cache', [
+                    'execution_id' => $executionId,
+                    'preserved_coins' => count($existingUniverse),
+                ]);
+
+                return $existingUniverse;
+            }
+
+            Log::warning('[CoinUniverseService] Universe refresh returned empty and no previous cache found', [
+                'execution_id' => $executionId,
+            ]);
+        }
+
         // Cache the result
         Cache::put(self::CACHE_KEY, $coins, self::CACHE_TTL);
 

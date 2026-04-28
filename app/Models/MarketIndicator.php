@@ -12,6 +12,23 @@ class MarketIndicator extends Model
 
     protected $table = 'market_indicators';
 
+    protected $fillable = [
+        'execution_id',
+        'coin',
+        'timeframe',
+        'timestamp',
+        'price',
+        'rsi',
+        'ema9',
+        'ema21',
+        'trend',
+        'source',
+        'volume',
+        'volume_ma',
+        'volatility',
+        'price_change_24h',
+    ];
+
     public $timestamps = false;
 
     protected function casts(): array

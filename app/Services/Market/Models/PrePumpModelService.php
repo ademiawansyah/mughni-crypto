@@ -14,14 +14,14 @@ class PrePumpModelService extends AbstractMarketModelService
     public function evaluateCoin(string $coin, ?array $indicators = null): ?ModelSignalDTO
     {
         $resolvedIndicators = $indicators ?? $this->resolveIndicators($coin);
-        $setup = $resolvedIndicators['1h'] ?? null;
-        $macro = $resolvedIndicators['4h'] ?? null;
+        $setup = $resolvedIndicators['10m'] ?? null;
+        $macro = $resolvedIndicators['15m'] ?? null;
 
         if ($setup === null || $macro === null) {
             return null;
         }
 
-        $bitcoinIndicator = $this->fetchLatestIndicator('bitcoin', '1h');
+        $bitcoinIndicator = $this->fetchLatestIndicator('bitcoin', '10m');
         $componentScores = $this->calculateComponentScores($resolvedIndicators, $bitcoinIndicator);
         $action = $this->determineAction($componentScores, $resolvedIndicators, $bitcoinIndicator);
 
@@ -34,7 +34,7 @@ class PrePumpModelService extends AbstractMarketModelService
         $marketRegime = $this->resolveMarketRegime();
         $regimeAdjuster = (int) config(sprintf('models.pre_pump.market_confidence_adjusters.%s', $marketRegime['market_regime'] ?? 'RANGING'), 0);
         $score = $this->clampInt($baseScore + $regimeAdjuster);
-        $minimumScore = (int) config('models.pre_pump.min_score', 65);
+        $minimumScore = (int) config('models.pre_pump.min_score_short_tf', 50);
 
         if ($score < $minimumScore) {
             return null;
@@ -45,7 +45,7 @@ class PrePumpModelService extends AbstractMarketModelService
             coin: $coin,
             action: $action,
             score: $score,
-            primaryTimeframe: '1h',
+            primaryTimeframe: '10m',
             componentScores: $componentScores,
             context: [
                 'market_regime' => $marketRegime['market_regime'] ?? 'RANGING',
@@ -73,8 +73,8 @@ class PrePumpModelService extends AbstractMarketModelService
      */
     public function calculateComponentScores(array $indicators, ?array $bitcoinIndicator = null): array
     {
-        $setup = $indicators['1h'] ?? [];
-        $macro = $indicators['4h'] ?? [];
+        $setup = $indicators['10m'] ?? [];
+        $macro = $indicators['15m'] ?? [];
         $setupTrend = (string) ($setup['trend'] ?? 'sideways');
         $setupRsi = is_numeric($setup['rsi'] ?? null) ? (float) $setup['rsi'] : 50.0;
         $volumeRatio = is_numeric($setup['volume_ratio'] ?? null) ? (float) $setup['volume_ratio'] : 0.0;
@@ -103,11 +103,11 @@ class PrePumpModelService extends AbstractMarketModelService
         }
 
         return [
-            'funding' => 0.0,
+            'funding' => 0.5,
             'atr_compression' => $atrCompression,
             'oi' => $volumeRatio >= 1.5 ? 1.0 : ($volumeRatio >= 1.2 ? 0.6 : 0.0),
             'rs' => $relativeStrength,
-            'cvd' => 0.0,
+            'cvd' => 0.5,
         ];
     }
 
@@ -120,14 +120,22 @@ class PrePumpModelService extends AbstractMarketModelService
      */
     public function determineAction(array $componentScores, array $indicators, ?array $bitcoinIndicator = null): string
     {
-        $setupTrend = (string) ($indicators['1h']['trend'] ?? 'sideways');
+        $setupTrend = (string) ($indicators['10m']['trend'] ?? 'sideways');
 
         if (
             ($componentScores['atr_compression'] ?? 0.0) >= 0.7
-            && ($componentScores['oi'] ?? 0.0) >= 0.6
-            && ($componentScores['rs'] ?? 0.0) >= 0.6
+            && (
+                ($componentScores['oi'] ?? 0.0) >= 0.6
+                || ($componentScores['rs'] ?? 0.0) >= 0.6
+            )
         ) {
-            return $this->bullishTrend($setupTrend) ? 'BUY' : 'SELL';
+            if ($this->bullishTrend($setupTrend)) {
+                return 'BUY';
+            }
+
+            if ($this->bearishTrend($setupTrend)) {
+                return 'SELL';
+            }
         }
 
         return 'HOLD';
@@ -150,7 +158,7 @@ class PrePumpModelService extends AbstractMarketModelService
      */
     protected function requiredTimeframes(): array
     {
-        return ['15m', '1h', '4h'];
+        return ['5m', '10m', '15m'];
     }
 
     protected function modelKey(): string

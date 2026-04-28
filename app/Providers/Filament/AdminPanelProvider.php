@@ -2,14 +2,9 @@
 
 namespace App\Providers\Filament;
 
-use App\Filament\Widgets\ConsensusCoinsWidget;
-use App\Filament\Widgets\CounterTrendSignalsTableWidget;
-use App\Filament\Widgets\HighestConvictionSignalsWidget;
+use App\Filament\Pages\ModelOpsPage;
 use App\Filament\Widgets\MarketRegimeStatusWidget;
-use App\Filament\Widgets\ModelExecutionHistoryWidget;
-use App\Filament\Widgets\MomentumSignalsTableWidget;
 use App\Filament\Widgets\PerformanceStatsWidget;
-use App\Filament\Widgets\PrePumpSignalsTableWidget;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -44,6 +39,7 @@ class AdminPanelProvider extends PanelProvider
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\Filament\Pages')
             ->pages([
                 Dashboard::class,
+                ModelOpsPage::class,
             ])
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\Filament\Widgets')
             ->widgets([
@@ -51,12 +47,6 @@ class AdminPanelProvider extends PanelProvider
                 FilamentInfoWidget::class,
                 MarketRegimeStatusWidget::class,
                 PerformanceStatsWidget::class,
-                CounterTrendSignalsTableWidget::class,
-                PrePumpSignalsTableWidget::class,
-                MomentumSignalsTableWidget::class,
-                ConsensusCoinsWidget::class,
-                HighestConvictionSignalsWidget::class,
-                ModelExecutionHistoryWidget::class,
             ])
             ->middleware([
                 EncryptCookies::class,
