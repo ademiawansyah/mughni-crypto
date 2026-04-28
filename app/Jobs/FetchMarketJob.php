@@ -4,9 +4,9 @@ namespace App\Jobs;
 
 use App\Models\GeneralConfig;
 use App\Services\Market\MarketDataService;
+use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
-use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
@@ -53,6 +53,14 @@ class FetchMarketJob implements ShouldQueue
             'execution_id' => $executionId,
         ]);
 
+        if (! GeneralConfig::isCronEnabled()) {
+            Log::info('[FetchMarketJob] Skipped: cron disabled', [
+                'execution_id' => $executionId,
+            ]);
+
+            return;
+        }
+
         /** @var array<string> $coins */
         $coins = GeneralConfig::getCoins();
         $timeframes = $this->resolveSortedTimeframes();
@@ -73,8 +81,6 @@ class FetchMarketJob implements ShouldQueue
 
         $marketDataService->ingest($coins, $timeframes, $executionId);
 
-        ProcessIndicatorJob::dispatch($coins, $timeframes, $executionId);
-
         Log::info('[FetchMarketJob] Execution completed', [
             'execution_id' => $executionId,
             'coins_count' => count($coins),
@@ -90,9 +96,9 @@ class FetchMarketJob implements ShouldQueue
         $timeframes = GeneralConfig::getTimeframes();
         $unique = array_values(array_unique($timeframes));
 
-        usort($unique, fn (string $a, string $b): int => $this->timeframeToMinutes($a) <=> $this->timeframeToMinutes($b));
+        usort($unique, fn(string $a, string $b): int => $this->timeframeToMinutes($a) <=> $this->timeframeToMinutes($b));
 
-        return array_values(array_filter($unique, fn (string $timeframe): bool => $this->timeframeToMinutes($timeframe) !== PHP_INT_MAX));
+        return array_values(array_filter($unique, fn(string $timeframe): bool => $this->timeframeToMinutes($timeframe) !== PHP_INT_MAX));
     }
 
     private function timeframeToMinutes(string $timeframe): int

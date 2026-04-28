@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\GeneralConfig;
 use App\Services\Market\MarketRegimeService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -51,6 +52,14 @@ class MarketRegimeJob implements ShouldQueue
         Log::info('[MarketRegimeJob] Started', [
             'execution_id' => $executionId,
         ]);
+
+        if (! GeneralConfig::isCronEnabled()) {
+            Log::info('[MarketRegimeJob] Skipped: cron disabled', [
+                'execution_id' => $executionId,
+            ]);
+
+            return;
+        }
 
         try {
             $regime = $regimeService->detectRegime($executionId);

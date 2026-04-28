@@ -1,12 +1,13 @@
 <?php
 
 use App\Jobs\CounterTrendJob;
+use App\Jobs\FetchMarketJob;
 use App\Jobs\MarketRegimeJob;
 use App\Jobs\MomentumJob;
 use App\Jobs\PrePumpJob;
 use App\Jobs\UpdateCoinUniverseJob;
+use App\Models\GeneralConfig;
 use App\Services\Notification\NotificationService;
-use App\Services\Trading\TradingCycleService;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Log;
@@ -16,20 +17,6 @@ use Illuminate\Support\Str;
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
-
-Artisan::command('trading:run-cycle', function (TradingCycleService $tradingCycleService) {
-    $executionId = (string) Str::uuid();
-
-    Log::info('[trading:run-cycle] Command started', [
-        'execution_id' => $executionId,
-    ]);
-
-    $tradingCycleService->run($executionId);
-
-    Log::info('[trading:run-cycle] Command completed', [
-        'execution_id' => $executionId,
-    ]);
-})->purpose('Run one full trading cycle using dynamic DB timeframes and candle aggregation');
 
 Artisan::command('notification:test-telegram {--chat_id=} {--bot=} {--action=BUY}', function (NotificationService $notificationService) {
     $executionId = (string) Str::uuid();
@@ -66,9 +53,32 @@ Artisan::command('notification:test-telegram {--chat_id=} {--bot=} {--action=BUY
     $this->line(sprintf('execution_id: %s', $executionId));
 })->purpose('Send a test Telegram trade signal notification');
 
-Schedule::command('trading:run-cycle')->everyFiveMinutes()->withoutOverlapping();
-Schedule::job(new MarketRegimeJob)->everyFiveMinutes()->withoutOverlapping();
-Schedule::job(new UpdateCoinUniverseJob)->dailyAt('00:00')->withoutOverlapping();
-Schedule::job(new CounterTrendJob)->everyFifteenMinutes()->withoutOverlapping();
-Schedule::job(new PrePumpJob)->everyThirtyMinutes()->withoutOverlapping();
-Schedule::job(new MomentumJob)->hourly()->withoutOverlapping();
+Schedule::job(new FetchMarketJob)
+    ->everyFiveMinutes()
+    ->withoutOverlapping()
+    ->when(fn(): bool => GeneralConfig::isCronEnabled());
+
+Schedule::job(new MarketRegimeJob)
+    ->everyFiveMinutes()
+    ->withoutOverlapping()
+    ->when(fn(): bool => GeneralConfig::isCronEnabled());
+
+Schedule::job(new UpdateCoinUniverseJob)
+    ->dailyAt('00:00')
+    ->withoutOverlapping()
+    ->when(fn(): bool => GeneralConfig::isCronEnabled());
+
+Schedule::job(new CounterTrendJob)
+    ->everyFifteenMinutes()
+    ->withoutOverlapping()
+    ->when(fn(): bool => GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('counter_trend'));
+
+Schedule::job(new PrePumpJob)
+    ->everyThirtyMinutes()
+    ->withoutOverlapping()
+    ->when(fn(): bool => GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('pre_pump'));
+
+Schedule::job(new MomentumJob)
+    ->hourly()
+    ->withoutOverlapping()
+    ->when(fn(): bool => GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('momentum'));

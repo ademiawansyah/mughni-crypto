@@ -19,6 +19,8 @@ use Illuminate\Database\Eloquent\Model;
  */
 class GeneralConfig extends Model
 {
+    private const TRUE_VALUES = ['1', 'true', 'yes', 'on'];
+
     protected $table = 'general_config';
 
     protected $fillable = ['key', 'value'];
@@ -94,5 +96,46 @@ class GeneralConfig extends Model
     public static function getTimeframes(): array
     {
         return static::getArray('timeframes', []);
+    }
+
+    /**
+     * Retrieve a config value by key and cast it to boolean.
+     *
+     * @param  string  $key  The config key to look up.
+     * @param  bool  $default  Fallback value if the key does not exist.
+     */
+    public static function getBool(string $key, bool $default = true): bool
+    {
+        $value = static::get($key);
+
+        if ($value === null) {
+            return $default;
+        }
+
+        return in_array(strtolower(trim((string) $value)), self::TRUE_VALUES, true);
+    }
+
+    /**
+     * Determine whether scheduled cron jobs are globally enabled.
+     */
+    public static function isCronEnabled(): bool
+    {
+        try {
+            return static::getBool('cron_enabled', (bool) config('market.cron_enabled_default', true));
+        } catch (\Throwable) {
+            return (bool) config('market.cron_enabled_default', true);
+        }
+    }
+
+    /**
+     * Determine whether a specific model pipeline is enabled.
+     */
+    public static function isModelEnabled(string $model): bool
+    {
+        try {
+            return static::getBool("{$model}_enabled", true);
+        } catch (\Throwable) {
+            return true;
+        }
     }
 }

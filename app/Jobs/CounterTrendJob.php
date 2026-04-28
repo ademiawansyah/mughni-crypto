@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\GeneralConfig;
 use App\Services\AI\PerModelAiLayer;
 use App\Services\Market\MarketRegimeService;
 use App\Services\Market\Models\CounterTrendModelService;
@@ -40,6 +41,19 @@ class CounterTrendJob implements ShouldQueue
         Log::info('[CounterTrendJob] Started', [
             'execution_id' => $executionId,
         ]);
+
+        $cronEnabled = GeneralConfig::isCronEnabled();
+        $modelEnabled = GeneralConfig::isModelEnabled('counter_trend');
+
+        if (! $cronEnabled || ! $modelEnabled) {
+            Log::info('[CounterTrendJob] Skipped due to cron/model disable flag', [
+                'execution_id' => $executionId,
+                'cron_enabled' => $cronEnabled,
+                'model_enabled' => $modelEnabled,
+            ]);
+
+            return;
+        }
 
         try {
             // Get global market context

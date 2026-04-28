@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\GeneralConfig;
 use App\Services\AI\PerModelAiLayer;
 use App\Services\Market\MarketRegimeService;
 use App\Services\Market\Models\PrePumpModelService;
@@ -40,6 +41,19 @@ class PrePumpJob implements ShouldQueue
         Log::info('[PrePumpJob] Started', [
             'execution_id' => $executionId,
         ]);
+
+        $cronEnabled = GeneralConfig::isCronEnabled();
+        $modelEnabled = GeneralConfig::isModelEnabled('pre_pump');
+
+        if (! $cronEnabled || ! $modelEnabled) {
+            Log::info('[PrePumpJob] Skipped due to cron/model disable flag', [
+                'execution_id' => $executionId,
+                'cron_enabled' => $cronEnabled,
+                'model_enabled' => $modelEnabled,
+            ]);
+
+            return;
+        }
 
         try {
             // Get global market context

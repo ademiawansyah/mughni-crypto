@@ -48,6 +48,9 @@ aux:
 redis-clear:
 	docker exec -it al_mughni php artisan cache:clear
 	docker exec -it al_mughni php artisan queue:clear
+
+cron-run-all:
+	docker exec -it al_mughni php artisan cron:run-all
 	docker exec -it al_mughni php artisan config:clear
 	docker exec -it al_mughni php artisan route:clear
 	docker exec -it al_mughni php artisan view:clear

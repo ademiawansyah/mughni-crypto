@@ -71,6 +71,61 @@ class CoinGeckoService
     }
 
     /**
+     * Fetch paginated market data from /coins/markets.
+     *
+     * Returns a flat list of coin entries per page, or an empty array on failure.
+     * Each entry includes: id, market_cap, total_volume, symbol.
+     *
+     * @param  int  $page  Page number (1-indexed)
+     * @param  int  $perPage  Results per page (max 250)
+     * @return array<int, array{id: string, symbol: string, market_cap: float|null, total_volume: float|null}>
+     */
+    public function fetchCoinMarkets(int $page = 1, int $perPage = 250): array
+    {
+        $request = Http::timeout($this->timeout)->baseUrl($this->baseUrl);
+
+        if ($this->apiKey !== null) {
+            $request = $request->withHeaders(['x-cg-demo-api-key' => $this->apiKey]);
+        }
+
+        try {
+            $response = $request->get('/coins/markets', [
+                'vs_currency' => $this->vsCurrency,
+                'order' => 'market_cap_desc',
+                'per_page' => $perPage,
+                'page' => $page,
+                'sparkline' => 'false',
+            ]);
+        } catch (ConnectionException $e) {
+            Log::error('[CoinGeckoService] Connection failed on /coins/markets', [
+                'exception' => $e->getMessage(),
+                'page' => $page,
+            ]);
+
+            return [];
+        }
+
+        if ($response->failed()) {
+            Log::error('[CoinGeckoService] HTTP request failed on /coins/markets', [
+                'status' => $response->status(),
+                'page' => $page,
+            ]);
+
+            return [];
+        }
+
+        /** @var array<int, array<string, mixed>> $data */
+        $data = $response->json() ?? [];
+
+        return array_map(fn (array $coin): array => [
+            'id' => (string) ($coin['id'] ?? ''),
+            'symbol' => strtoupper((string) ($coin['symbol'] ?? '')),
+            'market_cap' => is_numeric($coin['market_cap'] ?? null) ? (float) $coin['market_cap'] : null,
+            'total_volume' => is_numeric($coin['total_volume'] ?? null) ? (float) $coin['total_volume'] : null,
+        ], $data);
+    }
+
+    /**
      * Perform the actual HTTP request to /coins/{id}/market_chart.
      *
      * @param  string  $coin  CoinGecko coin ID

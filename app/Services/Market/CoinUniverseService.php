@@ -2,6 +2,7 @@
 
 namespace App\Services\Market;
 
+use App\Services\External\CoinGeckoService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
@@ -54,7 +55,7 @@ class CoinUniverseService
     private const MAX_COINS = 100;
 
     /**
-     * Stablecoin symbols to exclude
+     * Stablecoin CoinGecko IDs to exclude
      */
     private const STABLECOINS = [
         'tether',
@@ -63,25 +64,35 @@ class CoinUniverseService
         'paxos-standard',
         'true-usd',
         'dxchain-token',
+        'dai',
+        'frax',
+        'usdd',
+        'first-digital-usd',
+        'paypal-usd',
     ];
+
+    /**
+     * Symbols that identify stablecoins (USDT suffix, BUSD, etc.)
+     * Used as a secondary guard on top of the ID-based exclusion list.
+     */
+    private const STABLECOIN_SYMBOL_SUFFIXES = ['usdt', 'usdc', 'busd', 'usdp', 'tusd', 'dai', 'frax'];
+
+    public function __construct(
+        private readonly CoinGeckoService $coinGeckoService,
+    ) {}
 
     /**
      * Fetch all coins from CoinGecko, apply filters, and cache the result.
      *
      * Process:
-     * 1. Query CoinGecko `/coins/markets` endpoint (paginated)
-     * 2. Filter by market cap, volume, stablecoin status
-     * 3. Verify Binance futures availability (internal DB check)
-     * 4. Sort by market cap descending
-     * 5. Take top 100
-     * 6. Cache and return
-     *
-     * NOTE: Actual CoinGecko integration would use `MarketDataService`
-     * For Phase 1, mock data structure is shown; real implementation requires
-     * CoinGecko API key and pagination logic.
+     * 1. Query CoinGecko `/coins/markets` endpoint (paginated, up to 4 × 250)
+     * 2. Filter by market cap, volume, and stablecoin status
+     * 3. Sort by market cap descending
+     * 4. Take top 100
+     * 5. Cache and return
      *
      * @param  string  $executionId  Pipeline execution identifier
-     * @return array Filtered list of coins with metadata
+     * @return array<int, array{coin: string, symbol: string, market_cap: float, volume_24h: float}> Filtered list of coins
      */
     public function updateUniverse(string $executionId = ''): array
     {
@@ -103,7 +114,7 @@ class CoinUniverseService
      *
      * Returns cached value if available; otherwise returns empty array.
      *
-     * @return array List of coins
+     * @return array<int, array{coin: string, symbol: string, market_cap: float, volume_24h: float}>
      */
     public function getCachedUniverse(): array
     {
@@ -111,99 +122,92 @@ class CoinUniverseService
     }
 
     /**
-     * Fetch all coins from CoinGecko and apply filters.
+     * Fetch all coins from CoinGecko, apply filters, and return sorted list.
      *
-     * @return array Filtered and sorted coin list
+     * Paginates through /coins/markets (up to 4 pages × 250) and applies
+     * market cap, volume, and stablecoin filters in a single pass.
+     *
+     * @return array<int, array{coin: string, symbol: string, market_cap: float, volume_24h: float}> Filtered and sorted coin list
      */
     private function fetchAndFilterCoins(): array
     {
-        // In Phase 1, this is a placeholder. Real implementation would:
-        // 1. Call CoinGecko API via MarketDataService
-        // 2. Paginate through results (max 250 per page)
-        // 3. Apply filters in real-time
-        // 4. Verify Binance futures symbols
-
-        // For now, return a minimal structure showing expected format
         $coins = $this->getCoinsFromCoinGecko();
 
-        // Apply filters
-        $filtered = array_filter($coins, function ($coin) {
-            return $this->passesAllFilters($coin);
-        });
+        $filtered = array_values(array_filter(
+            $coins,
+            fn (array $coin): bool => $this->passesAllFilters($coin),
+        ));
 
-        // Sort by market cap descending
-        usort($filtered, fn($a, $b) => $b['market_cap'] <=> $a['market_cap']);
+        usort($filtered, fn (array $a, array $b): int => $b['market_cap'] <=> $a['market_cap']);
 
-        // Take top N
         return array_slice($filtered, 0, self::MAX_COINS);
     }
 
     /**
      * Evaluate whether a coin passes all filter criteria.
      *
-     * @param  array{coin: string, market_cap: ?float, volume_24h: ?float}  $coin
+     * @param  array{coin: string, symbol: string, market_cap: float|null, volume_24h: float|null}  $coin
      */
     private function passesAllFilters(array $coin): bool
     {
-        // Market cap filter
-        if (($coin['market_cap'] ?? 0) < self::MIN_MARKET_CAP) {
+        if (($coin['market_cap'] ?? 0.0) < self::MIN_MARKET_CAP) {
             return false;
         }
 
-        // Volume filter
-        if (($coin['volume_24h'] ?? 0) < self::MIN_VOLUME_24H) {
+        if (($coin['volume_24h'] ?? 0.0) < self::MIN_VOLUME_24H) {
             return false;
         }
 
-        // Stablecoin filter
         if (in_array($coin['coin'], self::STABLECOINS, true)) {
             return false;
         }
 
-        // Binance futures availability (simplified check)
-        // Real implementation would query Binance API or local symbol mapping
-        if (! $this->hasBindanceFutures($coin['coin'])) {
-            return false;
+        // Secondary stablecoin guard: catch symbols ending with a stablecoin suffix
+        $symbol = strtolower($coin['symbol'] ?? '');
+        foreach (self::STABLECOIN_SYMBOL_SUFFIXES as $suffix) {
+            if ($symbol === $suffix) {
+                return false;
+            }
         }
 
         return true;
     }
 
     /**
-     * Check whether coin has Binance futures available.
+     * Fetch coins from CoinGecko /coins/markets (paginated).
      *
-     * Phase 1: Simplified check. Real implementation would:
-     * - Query Binance API /fapi/v1/exchangeInfo
-     * - Cache symbol list locally
-     * - Verify trading enabled
+     * Fetches up to 4 pages of 250 results each (1 000 coins total) and stops
+     * early if a page returns fewer than 250 results.
      *
-     * @param  string  $coin  CoinGecko coin ID
-     */
-    private function hasBindanceFutures(string $coin): bool
-    {
-        // Placeholder: assume major coins have futures
-        $majorCoins = ['bitcoin', 'ethereum', 'binancecoin', 'cardano', 'solana'];
-
-        return in_array($coin, $majorCoins, true);
-    }
-
-    /**
-     * Fetch coins from CoinGecko API (placeholder for Phase 1).
-     *
-     * Real implementation:
-     * - Uses MarketDataService to call CoinGecko /coins/markets
-     * - Handles pagination (250 per page)
-     * - Filters in loop to avoid storing full list in memory
+     * @return array<int, array{coin: string, symbol: string, market_cap: float, volume_24h: float}>
      */
     private function getCoinsFromCoinGecko(): array
     {
-        // Phase 1 placeholder: return mock data
-        return [
-            ['coin' => 'bitcoin', 'market_cap' => 1_500_000_000_000, 'volume_24h' => 50_000_000_000],
-            ['coin' => 'ethereum', 'market_cap' => 250_000_000_000, 'volume_24h' => 15_000_000_000],
-            ['coin' => 'binancecoin', 'market_cap' => 60_000_000_000, 'volume_24h' => 2_000_000_000],
-            ['coin' => 'cardano', 'market_cap' => 20_000_000_000, 'volume_24h' => 1_000_000_000],
-            ['coin' => 'solana', 'market_cap' => 15_000_000_000, 'volume_24h' => 800_000_000],
-        ];
+        $result = [];
+        $maxPages = 4;
+
+        for ($page = 1; $page <= $maxPages; $page++) {
+            $batch = $this->coinGeckoService->fetchCoinMarkets($page, 250);
+
+            if (empty($batch)) {
+                break;
+            }
+
+            foreach ($batch as $item) {
+                $result[] = [
+                    'coin' => $item['id'],
+                    'symbol' => $item['symbol'],
+                    'market_cap' => $item['market_cap'] ?? 0.0,
+                    'volume_24h' => $item['total_volume'] ?? 0.0,
+                ];
+            }
+
+            // Stop paginating once we receive a partial page
+            if (count($batch) < 250) {
+                break;
+            }
+        }
+
+        return $result;
     }
 }

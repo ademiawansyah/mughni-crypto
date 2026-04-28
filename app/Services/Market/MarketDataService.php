@@ -115,7 +115,7 @@ class MarketDataService
         Log::info('[MarketDataService] MTF candle series prepared', [
             'execution_id' => $executionId,
             'coin' => $coin,
-            'counts' => array_map(static fn (array $series): int => count($series), $seriesByTimeframe),
+            'counts' => array_map(static fn(array $series): int => count($series), $seriesByTimeframe),
         ]);
 
         foreach ($seriesByTimeframe as $derivedTimeframe => $series) {
@@ -232,7 +232,7 @@ class MarketDataService
     {
         $unique = array_values(array_unique($timeframes));
 
-        usort($unique, fn (string $a, string $b): int => $this->timeframeToMinutes($a) <=> $this->timeframeToMinutes($b));
+        usort($unique, fn(string $a, string $b): int => $this->timeframeToMinutes($a) <=> $this->timeframeToMinutes($b));
 
         return $unique;
     }
@@ -285,18 +285,22 @@ class MarketDataService
      */
     private function storeIndicator(string $coin, string $timeframe, Carbon $timestamp, array $indicators, string $executionId): void
     {
-        $record = new MarketIndicator;
-        $record->execution_id = $executionId;
-        $record->coin = $coin;
-        $record->timeframe = $timeframe;
-        $record->timestamp = $timestamp;
-        $record->price = $indicators['price'];
-        $record->rsi = $indicators['rsi'];
-        $record->ema9 = $indicators['ema9'];
-        $record->ema21 = $indicators['ema21'];
-        $record->trend = $indicators['trend'];
-        $record->source = 'coingecko';
-        $record->save();
+        $record = MarketIndicator::updateOrCreate(
+            [
+                'coin' => $coin,
+                'timeframe' => $timeframe,
+                'timestamp' => $timestamp,
+            ],
+            [
+                'execution_id' => $executionId,
+                'price' => $indicators['price'],
+                'rsi' => $indicators['rsi'],
+                'ema9' => $indicators['ema9'],
+                'ema21' => $indicators['ema21'],
+                'trend' => $indicators['trend'],
+                'source' => 'coingecko',
+            ]
+        );
 
         Log::info('[MarketDataService] Indicator result stored', [
             'execution_id' => $executionId,

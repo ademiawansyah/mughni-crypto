@@ -46,7 +46,7 @@ return [
         'position_size_adjustment' => 0.8, // 80% of base size
 
         // AI Layer Configuration
-        'ai_enabled' => false,  // Enable per-model AI refinement
+        'ai_enabled' => true,  // Enable per-model AI refinement
         'notification_threshold' => 70,  // Confidence threshold for notifications
 
         // Job schedule: every 15 minutes
@@ -86,7 +86,7 @@ return [
         'position_size_adjustment' => 1.0, // Full position size (high confidence)
 
         // AI Layer Configuration
-        'ai_enabled' => false,  // Enable per-model AI refinement
+        'ai_enabled' => true,  // Enable per-model AI refinement
         'notification_threshold' => 75,  // Confidence threshold for notifications
 
         // Job schedule: every 30 minutes
@@ -127,7 +127,7 @@ return [
         'position_size_adjustment' => 0.9, // 90% of base size
 
         // AI Layer Configuration
-        'ai_enabled' => false,  // Enable per-model AI refinement
+        'ai_enabled' => true,  // Enable per-model AI refinement
         'notification_threshold' => 65,  // Confidence threshold for notifications
 
         // Job schedule: every 1 hour
