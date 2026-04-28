@@ -247,7 +247,7 @@ class SignalPreFilterService
         Log::info('[SignalPreFilterService] DTO signals prepared', [
             'execution_id' => $executionId,
             'coin' => $coin,
-            'signals' => array_map(static fn (PipelineTimeframeSignalDTO $signal): array => $signal->toArray(), $signals),
+            'signals' => array_map(static fn(PipelineTimeframeSignalDTO $signal): array => $signal->toArray(), $signals),
         ]);
 
         return $signals;

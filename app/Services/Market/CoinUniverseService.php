@@ -132,7 +132,7 @@ class CoinUniverseService
         });
 
         // Sort by market cap descending
-        usort($filtered, fn ($a, $b) => $b['market_cap'] <=> $a['market_cap']);
+        usort($filtered, fn($a, $b) => $b['market_cap'] <=> $a['market_cap']);
 
         // Take top N
         return array_slice($filtered, 0, self::MAX_COINS);

@@ -152,7 +152,7 @@ class TradingCycleService
             'mtf_score' => $mtfContext->mtfScore,
             'alignment' => $mtfContext->alignment,
             'bias' => $mtfContext->bias,
-            'timeframe_signals' => array_map(static fn ($signal): array => $signal->toArray(), $timeframeSignals),
+            'timeframe_signals' => array_map(static fn($signal): array => $signal->toArray(), $timeframeSignals),
         ]);
 
         // --- Signal-first pipeline ---
@@ -363,7 +363,7 @@ class TradingCycleService
 
             $prices = $rows
                 ->pluck('price')
-                ->map(static fn (mixed $price): float => (float) $price)
+                ->map(static fn(mixed $price): float => (float) $price)
                 ->values()
                 ->all();
 
@@ -459,7 +459,7 @@ class TradingCycleService
     {
         $validResults = array_filter(
             $mcpResults,
-            fn (?McpResult $result) => $result !== null && $result->score >= 1,
+            fn(?McpResult $result) => $result !== null && $result->score >= 1,
         );
 
         if (empty($validResults)) {
