@@ -279,7 +279,8 @@ class AiAdvisorService
     /**
      * Generate AI decision DTO from MTF context and entry timeframe indicators.
      *
-     * This method wraps the legacy MTF-context pipeline to preserve behavior.
+     * Returns null when AI is unavailable (rawResponse is null), signaling that
+     * the decision pipeline should proceed with MCP signal only.
      */
     public function adviseFromContextDto(
         string $coin,
@@ -301,6 +302,23 @@ class AiAdvisorService
         );
 
         if ($result === null) {
+            Log::warning('[AiAdvisorService] AI service unavailable (no indicator)', [
+                'execution_id' => $executionId,
+                'coin' => $coin,
+                'timeframe' => $entryTimeframe,
+            ]);
+
+            return null;
+        }
+
+        // If AI call failed (rawResponse is null), return null to signal AI unavailability
+        if ($result['raw_response'] === null) {
+            Log::warning('[AiAdvisorService] AI service unavailable (LM Studio failed)', [
+                'execution_id' => $executionId,
+                'coin' => $coin,
+                'timeframe' => $entryTimeframe,
+            ]);
+
             return null;
         }
 

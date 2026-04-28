@@ -10,6 +10,7 @@ use App\Services\Notification\NotificationService;
 use App\Services\Trading\DTO\AiAdviceDTO;
 use App\Services\Trading\DTO\FinalDecisionDTO;
 use App\Services\Trading\DTO\FusionMetadataDTO;
+use App\Services\Trading\DTO\MTFContextDTO;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -31,10 +32,11 @@ class SignalPersistenceService
         string $coin,
         string $triggerTimeframe,
         MarketIndicator $triggerIndicator,
-        McpResult $triggerMcpResult,
+        ?McpResult $triggerMcpResult,
         FinalDecisionDTO $finalDecision,
         FusionMetadataDTO $fusionMetadata,
         MTFResultDTO $mtfResult,
+        MTFContextDTO $activatedMtfContext,
         string $timeframeSummary,
         ?AiAdviceDTO $aiAdvice,
     ): void {
@@ -64,6 +66,15 @@ class SignalPersistenceService
             'execution_id' => $executionId,
             'coin' => $coin,
             'timeframe' => $triggerTimeframe,
+            'trigger_timeframe' => $triggerTimeframe,
+            'trigger_score' => $finalDecision->triggerScore ?? $triggerMcpResult?->score,
+            'mtf_raw_score' => $activatedMtfContext->mtfRawScore,
+            'mtf_effective_score' => $activatedMtfContext->mtfScore,
+            'mtf_direction' => $activatedMtfContext->direction,
+            'alignment' => $activatedMtfContext->alignment,
+            'mode' => $activatedMtfContext->mode,
+            'ai_used' => $aiAdvice !== null,
+            'ai_agreement' => $fusionMetadata->aiAgreement,
             'timestamp' => $triggerIndicator->timestamp,
             'input_data' => [
                 'price' => $triggerIndicator->price,
@@ -73,8 +84,8 @@ class SignalPersistenceService
                 'ema21' => $triggerIndicator->ema21,
                 'trend' => $triggerIndicator->trend,
                 'timeframe' => $triggerTimeframe,
-                'trigger_mcp_score' => $triggerMcpResult->score,
-                'trigger_mcp_candidate' => $triggerMcpResult->actionCandidate->value,
+                'trigger_mcp_score' => $triggerMcpResult?->score,
+                'trigger_mcp_candidate' => $triggerMcpResult?->actionCandidate?->value,
                 'ai_action' => $fusionMetadata->aiAction,
                 'ai_confidence' => $fusionMetadata->aiConfidence,
                 'mtf_score' => $mtfResult->mtfScore,

@@ -52,17 +52,17 @@ class SignalActivationService
 
     /**
      * @param  array<int, string>  $flags
-     * @return array{adjusted_score: float, adjusted_confidence: int, trigger_threshold: float, mode: string}
+     * @return array{adjusted_score: float, flags: array<int, string>, mode: string}
      */
     public function adjustFromConfig(
         float $mtfScore,
-        int $aiConfidence,
         array $flags = [],
         string $executionId = '',
         ?string $coin = null,
     ): array {
         $mode = $this->configService->getSignalActivationMode();
-        $adjusted = $this->adjust($mtfScore, $aiConfidence, $mode);
+        $adjusted = $this->adjust($mtfScore, 0, $mode);
+        $mergedFlags = array_values(array_unique(array_merge($flags, ["signal_activation_{$adjusted['mode']}"])));
 
         Log::info('[MTF] Adjusted score', [
             'execution_id' => $executionId,
@@ -70,9 +70,13 @@ class SignalActivationService
             'original_score' => round($mtfScore, 4),
             'adjusted_score' => $adjusted['adjusted_score'],
             'activation_mode' => $adjusted['mode'],
-            'flags' => array_values(array_unique(array_merge($flags, ["signal_activation_{$adjusted['mode']}"]))),
+            'flags' => $mergedFlags,
         ]);
 
-        return $adjusted;
+        return [
+            'adjusted_score' => $adjusted['adjusted_score'],
+            'flags' => $mergedFlags,
+            'mode' => $adjusted['mode'],
+        ];
     }
 }

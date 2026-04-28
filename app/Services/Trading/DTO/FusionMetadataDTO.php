@@ -18,5 +18,6 @@ readonly class FusionMetadataDTO
         public int $confidenceDelta,
         public int $confidenceAdjusted,
         public string $finalAction,
+        public ?bool $aiAgreement = null, // null when AI was not used; true/false when AI was called
     ) {}
 }

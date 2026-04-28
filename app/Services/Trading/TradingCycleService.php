@@ -10,8 +10,8 @@ use App\Services\Market\CandleBuilderService;
 use App\Services\Market\CandlePersistenceService;
 use App\Services\Market\FetchMarketDataService;
 use App\Services\Market\MarketContextPersistenceService;
+use App\Services\MCP\McpResult;
 use App\Services\MCP\MCPService;
-use App\Services\Trading\DTO\AiDecisionDTO;
 use App\Services\Trading\DTO\IndicatorDTO;
 use App\Services\Trading\DTO\MTFContextDTO;
 use Carbon\CarbonImmutable;
@@ -135,17 +135,10 @@ class TradingCycleService
 
         $mtfResult = $this->mtfDecisionService->evaluate($coin, $mcpResults, $timeframes, $executionId);
         $mtfContext = $this->mtfContextService->buildDto($mtfResult);
-        $triggerTimeframe = $mtfResult->roleTimeframes['trigger'] ?? ($timeframes[0] ?? '5m');
-        $triggerMcpResult = $mcpResults[$triggerTimeframe] ?? null;
         $timeframeSummary = $this->mtfDecisionService->buildTimeframeSummary($mtfResult->timeframeSignals);
 
         $baseSnapshot = [
             'execution_id' => $executionId,
-            'mcp_passed' => $triggerMcpResult !== null,
-            'mcp_score' => $triggerMcpResult?->score,
-            'mcp_candidate' => $triggerMcpResult?->actionCandidate->value,
-            'mcp_timeframe' => $triggerTimeframe,
-            'mcp_reason' => $triggerMcpResult === null ? 'no_trigger_candidate' : null,
             'mtf_score' => round($mtfResult->mtfScore, 4),
             'preliminary_action' => $mtfResult->preliminaryAction,
             'base_confidence' => $mtfResult->baseConfidence,
@@ -164,40 +157,103 @@ class TradingCycleService
             'timeframe_signals' => array_map(static fn ($signal): array => $signal->toArray(), $timeframeSignals),
         ]);
 
-        if ($triggerMcpResult === null) {
-            $this->marketContextPersistenceService->persist($mtfContext, $coin, array_merge($baseSnapshot, [
-                'final_action' => 'HOLD',
-                'final_confidence' => 0,
-                'decision_status' => 'skipped_mcp',
-            ]));
-
-            Log::info('[TradingCycleService] AI skipped because trigger MCP did not pass', [
-                'execution_id' => $executionId,
-                'coin' => $coin,
-                'trigger_timeframe' => $triggerTimeframe,
-            ]);
-
-            return;
+        // --- Signal-first pipeline ---
+        // Step 1: Determine if any signal exists (score >= 1 in any timeframe)
+        $signalExists = false;
+        foreach ($mcpResults as $mcpResult) {
+            if ($mcpResult !== null && $mcpResult->score >= 1) {
+                $signalExists = true;
+                break;
+            }
         }
 
-        $triggerIndicator = $this->fetchLatestIndicator($coin, $triggerTimeframe);
+        // Step 2: Call AI only if signal exists
+        $aiDecision = null;
+        $aiAdvice = null;
+        if ($signalExists) {
+            // Find best MCP result (highest score, highest timeframe when equal) for AI context
+            $bestMcpResult = $this->selectBestTriggerMcp($mcpResults);
+
+            if ($bestMcpResult !== null) {
+                $entryIndicator = $this->buildEntryIndicator($coin, $timeframes);
+
+                if ($entryIndicator !== null) {
+                    $timeframeSummary = $this->mtfDecisionService->buildTimeframeSummary($mtfResult->timeframeSignals);
+
+                    $aiAdvice = $this->aiAdvisorService->adviseFromContextDto(
+                        coin: $coin,
+                        entryTimeframe: $bestMcpResult->timeframe,
+                        entryIndicator: $entryIndicator,
+                        mtfContext: $mtfContext,
+                        triggerMcpResult: $bestMcpResult,
+                        mtfResult: $mtfResult,
+                        timeframeSummary: $timeframeSummary,
+                        executionId: $executionId,
+                    );
+
+                    $aiDecision = $aiAdvice?->decision ?? null;
+                }
+            }
+        } else {
+            Log::info('[SignalFlow] AI skipped: no signal exists', [
+                'execution_id' => $executionId,
+                'coin' => $coin,
+            ]);
+        }
+
+        // Step 3: Adjust MTF score for activation (flags only, no confidence change)
+        $activation = $this->signalActivationService->adjustFromConfig(
+            mtfScore: $mtfContext->mtfScore,
+            flags: $mtfContext->flags,
+            executionId: $executionId,
+            coin: $coin,
+        );
+
+        $activatedMtfContext = new MTFContextDTO(
+            mtfScore: $activation['adjusted_score'],
+            mtfRawScore: $mtfContext->mtfRawScore,
+            direction: $mtfContext->direction,
+            mode: $mtfContext->mode,
+            alignment: $mtfContext->alignment,
+            bias: $mtfContext->bias,
+            timeframeSignals: $mtfContext->timeframeSignals,
+            flags: $activation['flags'],
+        );
+
+        // Step 4: Fusion - ONLY place that determines: trigger_timeframe, final_action, confidence
+        $fusionOutcome = $this->decisionFusionService->fuseOutcomeDto($mcpResults, $activatedMtfContext, $aiDecision);
+
+        Log::info('[SignalFlow]', [
+            'execution_id' => $executionId,
+            'coin' => $coin,
+            'signal_exists' => $signalExists,
+            'trigger_timeframe' => $fusionOutcome->decision->triggerTimeframe,
+            'trigger_score' => $fusionOutcome->decision->triggerScore,
+            'mtf_raw_score' => $activatedMtfContext->mtfRawScore,
+            'mtf_effective_score' => $activatedMtfContext->mtfScore,
+            'mtf_direction' => $activatedMtfContext->direction,
+            'alignment' => $activatedMtfContext->alignment,
+            'mode' => $activatedMtfContext->mode,
+            'ai_used' => $aiAdvice !== null,
+            'ai_agreement' => $fusionOutcome->metadata->aiAgreement,
+            'final_action' => $fusionOutcome->decision->action,
+            'final_confidence' => $fusionOutcome->decision->confidence,
+        ]);
+
+        // Step 5: Get trigger indicator from fusion outcome
+        $triggerIndicator = $this->fetchLatestIndicator($coin, $fusionOutcome->decision->triggerTimeframe);
 
         if ($triggerIndicator === null) {
-            $this->marketContextPersistenceService->persist($mtfContext, $coin, array_merge($baseSnapshot, [
-                'final_action' => 'HOLD',
-                'final_confidence' => 0,
-                'decision_status' => 'missing_trigger_indicator',
-            ]));
-
-            Log::warning('[TradingCycleService] Missing trigger indicator', [
+            Log::warning('[TradingCycleService] Trigger indicator not available', [
                 'execution_id' => $executionId,
                 'coin' => $coin,
-                'trigger_timeframe' => $triggerTimeframe,
+                'trigger_timeframe' => $fusionOutcome->decision->triggerTimeframe,
             ]);
 
             return;
         }
 
+        // Step 6: Apply guardrails and risk
         $entryIndicator = new IndicatorDTO(
             timeframe: (string) $triggerIndicator->timeframe,
             rsi: (float) $triggerIndicator->rsi,
@@ -206,66 +262,6 @@ class TradingCycleService
             price: (float) $triggerIndicator->price,
         );
 
-        $aiAdvice = $this->aiAdvisorService->adviseFromContextDto(
-            coin: $coin,
-            entryTimeframe: $triggerTimeframe,
-            entryIndicator: $entryIndicator,
-            mtfContext: $mtfContext,
-            triggerMcpResult: $triggerMcpResult,
-            mtfResult: $mtfResult,
-            timeframeSummary: $timeframeSummary,
-            executionId: $executionId,
-        );
-
-        $aiDecision = $aiAdvice?->decision ?? new AiDecisionDTO(
-            action: 'HOLD',
-            confidence: 0,
-            reason: 'AI decision unavailable',
-        );
-
-        $activation = $this->signalActivationService->adjustFromConfig(
-            mtfScore: $mtfContext->mtfScore,
-            aiConfidence: $aiDecision->confidence,
-            flags: $mtfContext->flags,
-            executionId: $executionId,
-            coin: $coin,
-        );
-
-        $passesActivationThreshold = abs($activation['adjusted_score']) >= $activation['trigger_threshold']
-            || ($mtfContext->mode === 'trend_follow' && abs($activation['adjusted_score']) >= 0.5);
-
-        if ($passesActivationThreshold) {
-            Log::info('[SignalActivation] Triggered', [
-                'execution_id' => $executionId,
-                'coin' => $coin,
-                'mtf_score' => $activation['adjusted_score'],
-                'mode' => $mtfContext->mode,
-                'mcp_score' => $triggerMcpResult->score,
-                'confidence' => $activation['adjusted_confidence'],
-            ]);
-        }
-
-        $activatedMtfContext = new MTFContextDTO(
-            mtfScore: $activation['adjusted_score'],
-            direction: $mtfContext->direction,
-            mode: $mtfContext->mode,
-            alignment: $mtfContext->alignment,
-            bias: $mtfContext->bias,
-            timeframeSignals: $mtfContext->timeframeSignals,
-            flags: array_values(array_unique(array_merge(
-                $mtfContext->flags,
-                ["signal_activation_{$activation['mode']}"],
-            ))),
-        );
-
-        $activatedAiDecision = new AiDecisionDTO(
-            action: $aiDecision->action,
-            confidence: $activation['adjusted_confidence'],
-            reason: $aiDecision->reason,
-            validationFlags: $aiDecision->validationFlags,
-        );
-
-        $fusionOutcome = $this->decisionFusionService->fuseOutcomeDto($activatedAiDecision, $activatedMtfContext);
         $guardedDecision = $this->guardrailService->apply($fusionOutcome->decision, $entryIndicator);
 
         $guardrailAccepted = in_array($guardedDecision->action, ['BUY', 'SELL'], true);
@@ -290,15 +286,37 @@ class TradingCycleService
         $this->signalPersistenceService->persist(
             executionId: $executionId,
             coin: $coin,
-            triggerTimeframe: $triggerTimeframe,
+            triggerTimeframe: $fusionOutcome->decision->triggerTimeframe,
             triggerIndicator: $triggerIndicator,
-            triggerMcpResult: $triggerMcpResult,
+            triggerMcpResult: null,
             finalDecision: $finalDecision,
             fusionMetadata: $fusionOutcome->metadata,
             mtfResult: $mtfResult,
+            activatedMtfContext: $activatedMtfContext,
             timeframeSummary: $timeframeSummary,
             aiAdvice: $aiAdvice,
         );
+    }
+
+    /**
+     * Build entry indicator - use best available timeframe indicator
+     */
+    private function buildEntryIndicator(string $coin, array $timeframes): ?IndicatorDTO
+    {
+        foreach ($timeframes as $timeframe) {
+            $indicator = $this->fetchLatestIndicator($coin, $timeframe);
+            if ($indicator !== null) {
+                return new IndicatorDTO(
+                    timeframe: (string) $indicator->timeframe,
+                    rsi: (float) $indicator->rsi,
+                    trend: (string) $indicator->trend,
+                    volumeRatio: (float) ($indicator->volume_ratio ?? 0.0),
+                    price: (float) $indicator->price,
+                );
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -430,6 +448,59 @@ class TradingCycleService
             ->where('timeframe', $timeframe)
             ->orderByDesc('timestamp')
             ->first();
+    }
+
+    /**
+     * Select best MCP result by score DESC, then timeframe DESC (higher timeframes preferred).
+     * Only considers results with score >= 1 (valid signals).
+     *
+     * @param  array<string, McpResult|null>  $mcpResults  MCP results keyed by timeframe
+     * @return McpResult|null Best trigger result, or null if no valid signal
+     */
+    private function selectBestTriggerMcp(array $mcpResults): ?McpResult
+    {
+        $validResults = array_filter(
+            $mcpResults,
+            fn (?McpResult $result) => $result !== null && $result->score >= 1,
+        );
+
+        if (empty($validResults)) {
+            return null;
+        }
+
+        // Sort by: score DESC (higher scores first), timeframe DESC (higher timeframes when equal scores)
+        usort($validResults, function (McpResult $a, McpResult $b): int {
+            $scoreCompare = $b->score <=> $a->score; // DESC: higher scores first
+            if ($scoreCompare !== 0) {
+                return $scoreCompare;
+            }
+            // When scores are equal, prefer higher timeframe
+            $aMinutes = $this->timeframeToMinutes($a->timeframe);
+            $bMinutes = $this->timeframeToMinutes($b->timeframe);
+
+            return $bMinutes <=> $aMinutes; // DESC: higher timeframes first
+        });
+
+        return reset($validResults);
+    }
+
+    /**
+     * Convert timeframe string (e.g., '5m', '1h') to minutes for comparison.
+     *
+     * @param  string  $timeframe  Timeframe string (e.g., '5m', '15m', '1h')
+     * @return int Minutes value, or PHP_INT_MAX for unknown formats
+     */
+    private function timeframeToMinutes(string $timeframe): int
+    {
+        if (preg_match('/^(\d+)m$/i', trim($timeframe), $matches) === 1) {
+            return (int) $matches[1];
+        }
+
+        if (preg_match('/^(\d+)h$/i', trim($timeframe), $matches) === 1) {
+            return ((int) $matches[1]) * 60;
+        }
+
+        return PHP_INT_MAX;
     }
 
     private function resolvePriceChange24h(MarketIndicator $indicator): ?float

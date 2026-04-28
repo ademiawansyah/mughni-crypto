@@ -2,89 +2,130 @@
 
 namespace Tests\Unit\Services\Trading;
 
+use App\Enums\ActionCandidate;
+use App\Enums\MarketTrend;
+use App\Services\MCP\McpResult;
 use App\Services\Trading\DecisionFusionService;
+use App\Services\Trading\DTO\MTFContextDTO;
+use App\Services\Trading\DTO\TimeframeSignalDTO;
 use Tests\TestCase;
 
 class DecisionFusionServiceTest extends TestCase
 {
-    public function test_it_uses_mtf_direction_when_mtf_is_strong(): void
+    private DecisionFusionService $service;
+
+    protected function setUp(): void
     {
-        $service = new DecisionFusionService;
-
-        $result = $service->fuse(
-            [
-                'action' => 'SELL',
-                'confidence' => 62,
-                'risk_level' => 'MEDIUM',
-                'reason' => 'ai sell',
-                'flags' => [],
-            ],
-            [
-                'mtf_score' => 2.8,
-                'alignment' => 'aligned',
-                'context_bias' => 'bullish',
-                'mode' => 'trend_follow',
-                'base_confidence' => 60,
-                'flags' => [],
-            ],
-        );
-
-        $this->assertSame('BUY', $result['action']);
-        $this->assertSame(70, $result['confidence']);
-        $this->assertContains('mtf_dominant', $result['flags']);
-        $this->assertSame('aligned', $result['mtf_alignment']);
+        parent::setUp();
+        $this->service = new DecisionFusionService;
     }
 
-    public function test_it_balances_medium_mtf_and_penalizes_conflict(): void
+    public function test_returns_hold_when_no_signal_exists(): void
     {
-        $service = new DecisionFusionService;
+        $mcpResults = [
+            '5m' => new McpResult(
+                symbol: 'bitcoin',
+                timeframe: '5m',
+                actionCandidate: ActionCandidate::Buy,
+                score: 0,
+                trend: MarketTrend::Up,
+                rsi: 45.0,
+                emaTrend: 'bullish',
+                volumeRatio: 1.2,
+                currentPrice: 50000.0,
+            ),
+        ];
 
-        $result = $service->fuse(
-            [
-                'action' => 'BUY',
-                'confidence' => 70,
-                'risk_level' => 'LOW',
-                'reason' => 'ai buy',
+        $mtfContext = new MTFContextDTO(
+            mtfScore: 0.5,
+            mtfRawScore: 0.0,
+            direction: 'BUY',
+            mode: 'trend_follow',
+            alignment: 'mixed',
+            bias: 'neutral',
+            timeframeSignals: [
+                new TimeframeSignalDTO(timeframe: '5m', rsi: 45.0, trend: 'UP', mcpScore: 0, signalType: 'neutral'),
             ],
-            [
-                'mtf_score' => 1.4,
-                'alignment' => 'conflict',
-                'context_bias' => 'bearish',
-                'mode' => 'reversal',
-                'base_confidence' => 55,
-                'flags' => [],
-            ],
+            flags: [],
         );
 
-        $this->assertSame('BUY', $result['action']);
-        $this->assertSame(60, $result['confidence']);
-        $this->assertSame('opposed', $result['mtf_alignment']);
+        $result = $this->service->fuse($mcpResults, $mtfContext, null);
+
+        $this->assertSame('HOLD', $result['action']);
+        $this->assertSame(0, $result['confidence']);
     }
 
-    public function test_it_marks_weak_mtf_and_reduces_confidence(): void
+    public function test_uses_trigger_timeframe_action_with_base_confidence(): void
     {
-        $service = new DecisionFusionService;
+        $mcpResults = [
+            '5m' => new McpResult(
+                symbol: 'bitcoin',
+                timeframe: '5m',
+                actionCandidate: ActionCandidate::Buy,
+                score: 2,
+                trend: MarketTrend::Up,
+                rsi: 28.0,
+                emaTrend: 'bullish',
+                volumeRatio: 1.5,
+                currentPrice: 50000.0,
+            ),
+        ];
 
-        $result = $service->fuse(
-            [
-                'action' => 'SELL',
-                'confidence' => 52,
-                'risk_level' => 'MEDIUM',
-                'reason' => 'weak sell',
+        $mtfContext = new MTFContextDTO(
+            mtfScore: 1.2,
+            mtfRawScore: 0.0,
+            direction: 'BUY',
+            mode: 'trend_follow',
+            alignment: 'aligned',
+            bias: 'bullish',
+            timeframeSignals: [
+                new TimeframeSignalDTO(timeframe: '5m', rsi: 28.0, trend: 'UP', mcpScore: 2, signalType: 'reversal'),
             ],
-            [
-                'mtf_score' => 0.7,
-                'alignment' => 'mixed',
-                'context_bias' => 'neutral',
-                'mode' => 'trend_follow',
-                'base_confidence' => 65,
-                'flags' => [],
-            ],
+            flags: [],
         );
 
-        $this->assertSame('SELL', $result['action']);
-        $this->assertSame(42, $result['confidence']);
-        $this->assertSame(-10, $result['confidence_delta']);
-        $this->assertContains('mtf_weak', $result['flags']);
+        $result = $this->service->fuse($mcpResults, $mtfContext, null);
+
+        $this->assertSame('BUY', $result['action']);
+        $this->assertSame(55, $result['confidence']);
+        $this->assertContains('trigger_5m', $result['flags']);
+    }
+
+    public function test_applies_mtf_conflict_penalty(): void
+    {
+        $mcpResults = [
+            '5m' => new McpResult(
+                symbol: 'bitcoin',
+                timeframe: '5m',
+                actionCandidate: ActionCandidate::Buy,
+                score: 2,
+                trend: MarketTrend::Up,
+                rsi: 28.0,
+                emaTrend: 'bullish',
+                volumeRatio: 1.5,
+                currentPrice: 50000.0,
+            ),
+        ];
+
+        $mtfContext = new MTFContextDTO(
+            mtfScore: -1.6, // Strong bearish but trigger is BUY
+            mtfRawScore: 0.0,
+            direction: 'SELL',
+            mode: 'trend_follow',
+            alignment: 'conflict',
+            bias: 'bearish',
+            timeframeSignals: [
+                new TimeframeSignalDTO(timeframe: '5m', rsi: 28.0, trend: 'UP', mcpScore: 2, signalType: 'reversal'),
+            ],
+            flags: [],
+        );
+
+        $result = $this->service->fuse($mcpResults, $mtfContext, null);
+
+        // Confidence becomes 55 - 15 = 40, which falls below 45 guardrail, so action converts to HOLD with confidence 0
+        $this->assertSame('HOLD', $result['action']);
+        $this->assertSame(0, $result['confidence']);
+        $this->assertContains('mtf_conflict_strong', $result['flags']);
+        $this->assertContains('guardrail_low_confidence', $result['flags']);
     }
 }

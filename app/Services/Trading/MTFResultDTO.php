@@ -16,6 +16,7 @@ readonly class MTFResultDTO
 {
     /**
      * @param  float  $mtfScore  Aggregate score across role-based timeframe scoring.
+     * @param  float  $mtfRawScore  Original weighted score before adjustments (reversals, boosts).
      * @param  string  $preliminaryAction  Deterministic preliminary action: BUY|SELL|HOLD.
      * @param  int  $baseConfidence  Base confidence before optional AI refinement.
      * @param  string  $mode  reversal|trend_follow.
@@ -25,6 +26,7 @@ readonly class MTFResultDTO
      */
     public function __construct(
         public float $mtfScore,
+        public float $mtfRawScore,
         public string $preliminaryAction,
         public int $baseConfidence,
         public string $mode,
@@ -38,6 +40,7 @@ readonly class MTFResultDTO
      *
      * @return array{
      *   mtf_score: float,
+     *   mtf_raw_score: float,
      *   preliminary_action: string,
      *   base_confidence: int,
      *   mode: string,
@@ -50,6 +53,7 @@ readonly class MTFResultDTO
     {
         return [
             'mtf_score' => $this->mtfScore,
+            'mtf_raw_score' => $this->mtfRawScore,
             'preliminary_action' => $this->preliminaryAction,
             'base_confidence' => $this->baseConfidence,
             'mode' => $this->mode,

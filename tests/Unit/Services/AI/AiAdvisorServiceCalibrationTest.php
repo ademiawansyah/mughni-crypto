@@ -21,8 +21,8 @@ class AiAdvisorServiceCalibrationTest extends TestCase
             'reason' => 'test',
         ], 1);
 
-        $this->assertSame(50, $decision['confidence']);
-        $this->assertSame('HOLD', $decision['action']);
+        $this->assertSame(45, $decision['confidence']);
+        $this->assertSame('BUY', $decision['action']);
     }
 
     public function test_score_one_keeps_action_when_calibrated_confidence_reaches_55_or_higher(): void
@@ -58,8 +58,8 @@ class AiAdvisorServiceCalibrationTest extends TestCase
             'reason' => 'test',
         ], 2);
 
-        $this->assertSame(55, $lowDecision['confidence']);
-        $this->assertSame(70, $highDecision['confidence']);
+        $this->assertSame(50, $lowDecision['confidence']);
+        $this->assertSame(85, $highDecision['confidence']);
     }
 
     public function test_score_three_clamps_to_band(): void
@@ -73,7 +73,7 @@ class AiAdvisorServiceCalibrationTest extends TestCase
             'reason' => 'test',
         ], 3);
 
-        $this->assertSame(80, $decision['confidence']);
+        $this->assertSame(90, $decision['confidence']);
     }
 
     public function test_score_four_or_higher_clamps_to_band(): void
@@ -87,7 +87,7 @@ class AiAdvisorServiceCalibrationTest extends TestCase
             'reason' => 'test',
         ], 4);
 
-        $this->assertSame(70, $decision['confidence']);
+        $this->assertSame(60, $decision['confidence']);
     }
 
     private function makeService(): AiAdvisorService

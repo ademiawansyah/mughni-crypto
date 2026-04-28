@@ -14,7 +14,8 @@ readonly class MTFContextDTO
      * @param  array<int, string>  $flags
      */
     public function __construct(
-        public float $mtfScore,
+        public float $mtfScore, // Effective score after adjustments (HTF conflict, soft conflict, entry boost)
+        public float $mtfRawScore, // Original weighted score before adjustments
         public string $direction,
         public string $mode,
         public string $alignment,

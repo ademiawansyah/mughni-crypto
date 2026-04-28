@@ -2,6 +2,7 @@
 
 namespace App\Services\Trading;
 
+use App\Services\MCP\McpResult;
 use App\Services\Trading\DTO\AiDecisionDTO;
 use App\Services\Trading\DTO\FinalDecisionDTO;
 use App\Services\Trading\DTO\FusionMetadataDTO;
@@ -12,40 +13,33 @@ use Illuminate\Support\Facades\Log;
 /**
  * DecisionFusionService
  *
- * Combines AI recommendation with MTF context into a single final decision.
+ * Signal-first fusion algorithm that combines MCP signals, MTF context, and optional AI refinement
+ * into a final decision. MCP signal existence drives the pipeline; AI refines confidence only.
  *
- * Fusion tiers (based on abs(mtf_score)):
- *   ≥ 2.5  — Strong MTF: MTF direction overrides AI, confidence floored at 70.
- *   1.0–2.5  — Medium MTF: AI action primary; ±confidence adjusted by MTF alignment.
- *   < 1.0  — Weak MTF: AI action primary; confidence reduced by 10.
- *
- * Decision conflicts (AI action ≠ MTF direction) are always flagged explicitly.
+ * Algorithm (6 steps):
+ *   1. Detect signal existence: any(mcpResults where score >= 1) → if false, return HOLD
+ *   2. Select best trigger: sort by score DESC, timeframe DESC → first qualifying result
+ *   3. Base decision: final_action = trigger->actionCandidate, base_confidence = 55
+ *   4. MTF conflict check: if mtf_direction != trigger_direction AND abs(mtf_score) >= 1.5 → confidence -= 15
+ *   5. AI refinement (if available):
+ *      - IF ai_action == HOLD AND trigger_action != HOLD → discard AI, use base_confidence
+ *      - ELSE IF ai_action == final_action → confidence = max(base_confidence, ai_confidence)
+ *      - ELSE → use base_confidence
+ *   6. Guardrail: if confidence < 45 → HOLD
  */
 class DecisionFusionService
 {
     /**
-     * Fuse AI decision and MTF context and return decision + metadata DTOs.
+     * Fuse MCP results, MTF context, and optional AI decision into final decision + metadata.
+     *
+     * @param  array<string, McpResult|null>  $mcpResults  Per-timeframe MCP evaluation results
+     * @param  MTFContextDTO  $mtfContext  Multi-timeframe aggregated context
+     * @param  AiDecisionDTO|null  $aiDecision  Optional AI recommendation (null when AI unavailable)
+     * @return FusionOutcomeDTO Decision + metadata DTOs
      */
-    public function fuseOutcomeDto(AiDecisionDTO $aiDecision, MTFContextDTO $mtfContext): FusionOutcomeDTO
+    public function fuseOutcomeDto(array $mcpResults, MTFContextDTO $mtfContext, ?AiDecisionDTO $aiDecision): FusionOutcomeDTO
     {
-        $fused = $this->fuse(
-            aiDecision: [
-                'action' => $aiDecision->action,
-                'confidence' => $aiDecision->confidence,
-                'risk_level' => 'HIGH',
-                'reason' => $aiDecision->reason,
-                'flags' => $aiDecision->validationFlags,
-            ],
-            mtfContext: [
-                'mtf_score' => $mtfContext->mtfScore,
-                'alignment' => $mtfContext->alignment,
-                'context_bias' => $mtfContext->bias,
-                'mode' => $mtfContext->mode,
-                'base_confidence' => 50,
-                'flags' => $mtfContext->flags,
-                'trigger_threshold' => $this->resolveTriggerThresholdFromFlags($mtfContext->flags),
-            ],
-        );
+        $fused = $this->fuse($mcpResults, $mtfContext, $aiDecision);
 
         return new FusionOutcomeDTO(
             decision: new FinalDecisionDTO(
@@ -60,176 +54,288 @@ class DecisionFusionService
                 flags: is_array($fused['flags'] ?? null) ? $fused['flags'] : [],
                 mtfScore: (float) $fused['mtf_score'],
                 reason: (string) $fused['reason'],
+                triggerTimeframe: (string) ($fused['trigger_timeframe'] ?? 'unknown'),
+                triggerScore: is_int($fused['trigger_score'] ?? null) ? $fused['trigger_score'] : null,
             ),
             metadata: new FusionMetadataDTO(
-                aiAction: (string) $fused['ai_action'],
-                aiConfidence: (int) $fused['ai_confidence'],
+                aiAction: (string) ($fused['ai_action'] ?? 'none'),
+                aiConfidence: (int) ($fused['ai_confidence'] ?? 0),
                 mtfScore: (float) $fused['mtf_score'],
-                mtfAlignment: (string) $fused['mtf_alignment'],
+                mtfAlignment: (string) ($fused['mtf_alignment'] ?? 'unknown'),
                 contextBias: (string) $fused['context_bias'],
-                confidenceDelta: (int) $fused['confidence_delta'],
-                confidenceAdjusted: (int) $fused['confidence_adjusted'],
-                finalAction: (string) $fused['final_action'],
+                confidenceDelta: (int) ($fused['confidence_delta'] ?? 0),
+                confidenceAdjusted: (int) $fused['confidence'],
+                finalAction: (string) $fused['action'],
+                aiAgreement: isset($fused['ai_agreement']) ? (bool) $fused['ai_agreement'] : null,
             ),
         );
     }
 
     /**
-     * Fuse AI decision and MTF context and return DTO output.
-     */
-    public function fuseDto(AiDecisionDTO $aiDecision, MTFContextDTO $mtfContext): FinalDecisionDTO
-    {
-        return $this->fuseOutcomeDto($aiDecision, $mtfContext)->decision;
-    }
-
-    /**
-     * Merge AI decision and MTF context into a fused decision payload.
+     * Fuse MCP results, MTF context, and optional AI decision using signal-first algorithm.
      *
-     * MTF score drives which tier applies. AI action is preserved in medium/weak
-     * tiers; MTF direction dominates in the strong tier.
-     *
-     * @param  array{action: string, confidence: int, risk_level: string, reason: string, flags?: array<int, string>}  $aiDecision
-     * @param  array{mtf_score: float, alignment: string, context_bias: string, mode: string, base_confidence: int, flags: array<int, string>, trigger_threshold?: float}  $mtfContext
+     * @param  array<string, McpResult|null>  $mcpResults  Per-timeframe MCP results
+     * @param  MTFContextDTO  $mtfContext  MTF context
+     * @param  AiDecisionDTO|null  $aiDecision  Optional AI decision (null when unavailable)
      * @return array{
      *   action: string,
      *   confidence: int,
      *   risk_level: string,
      *   reason: string,
      *   flags: array<int, string>,
-     *   ai_action: string,
-     *   ai_confidence: int,
+     *   ai_action: string|null,
+     *   ai_confidence: int|null,
      *   mtf_score: float,
      *   mtf_alignment: string,
      *   context_bias: string,
      *   confidence_delta: int,
-     *   confidence_adjusted: int,
-     *   final_action: string
+     *   trigger_timeframe: string|null
      * }
      */
-    public function fuse(array $aiDecision, array $mtfContext): array
+    public function fuse(array $mcpResults, MTFContextDTO $mtfContext, ?AiDecisionDTO $aiDecision): array
     {
-        $aiAction = strtoupper((string) $aiDecision['action']);
-        $aiConfidence = max(0, min(100, (int) $aiDecision['confidence']));
+        $flags = array_values(array_unique($mtfContext->flags));
 
-        $mtfScore = (float) $mtfContext['mtf_score'];
-        $mtfAlignment = strtolower((string) ($mtfContext['alignment'] ?? 'mixed'));
-        $contextBias = (string) $mtfContext['context_bias'];
-        $mode = strtolower((string) ($mtfContext['mode'] ?? 'trend_follow'));
-        $triggerThreshold = (float) ($mtfContext['trigger_threshold'] ?? 1.0);
-        $absScore = abs($mtfScore);
-
-        // Derive MTF direction from context bias (bullish → BUY, bearish → SELL)
-        $mtfDirection = match ($contextBias) {
-            'bullish' => 'BUY',
-            'bearish' => 'SELL',
-            default => 'HOLD',
-        };
-
-        $flags = $this->normalizeFlags(array_merge(
-            (array) ($aiDecision['flags'] ?? []),
-            (array) ($mtfContext['flags'] ?? []),
-        ));
-
-        // Conflict detection — always explicit regardless of fusion tier
-        if ($aiAction !== 'HOLD' && $mtfDirection !== 'HOLD' && $aiAction !== $mtfDirection) {
-            $flags[] = 'decision_conflict';
+        // --- STEP 1: Detect signal existence ---
+        $signalExists = false;
+        foreach ($mcpResults as $mcpResult) {
+            if ($mcpResult !== null && $mcpResult->score >= 1) {
+                $signalExists = true;
+                break;
+            }
         }
 
-        $finalAction = $aiAction;
-        $finalConfidence = $aiConfidence;
+        if (! $signalExists) {
+            Log::info('[DecisionFusionService] No signal detected (all MCP scores < 1)', [
+                'mtf_score' => $mtfContext->mtfScore,
+            ]);
+
+            return $this->buildHoldDecision(
+                reason: 'No signal detected',
+                mtfScore: $mtfContext->mtfScore,
+                contextBias: $mtfContext->bias,
+                flags: $flags,
+            );
+        }
+
+        // --- STEP 2: Find best trigger (highest score, highest timeframe when equal) ---
+        $triggerMcpResult = $this->selectBestTrigger($mcpResults);
+        $triggerTimeframe = $triggerMcpResult?->timeframe;
+
+        if ($triggerMcpResult === null) {
+            return $this->buildHoldDecision(
+                reason: 'No valid trigger timeframe',
+                mtfScore: $mtfContext->mtfScore,
+                contextBias: $mtfContext->bias,
+                flags: $flags,
+            );
+        }
+
+        // --- STEP 3: Base decision from trigger ---
+        $finalAction = $triggerMcpResult->actionCandidate->value;
+        $baseConfidence = 55;
+        $flags[] = "trigger_{$triggerTimeframe}";
+
+        // --- STEP 4: MTF conflict check ---
+        $mtfDirection = $this->resolveMtfDirection($mtfContext->bias);
         $confidenceDelta = 0;
 
-        if ($absScore >= 2.5) {
-            // Tier 1: Strong MTF — MTF direction is authoritative
-            $finalAction = $mtfDirection !== 'HOLD' ? $mtfDirection : $aiAction;
-            $finalConfidence = max($aiConfidence, 70);
-            $confidenceDelta = $finalConfidence - $aiConfidence;
-            $flags[] = 'mtf_dominant';
-        } elseif ($absScore >= $triggerThreshold) {
-            // Tier 2: Medium MTF — AI action primary, alignment-based adjustment
-            $finalAction = $aiAction;
+        if ($mtfDirection !== 'HOLD' && $mtfDirection !== $finalAction && abs($mtfContext->mtfScore) >= 1.5) {
+            $confidenceDelta = -15;
+            $flags[] = 'mtf_conflict_strong';
+            Log::info('[DecisionFusionService] MTF strong conflict detected', [
+                'mtf_direction' => $mtfDirection,
+                'trigger_action' => $finalAction,
+                'mtf_score' => $mtfContext->mtfScore,
+            ]);
+        }
 
-            if ($aiAction !== 'HOLD' && $mtfAlignment === 'aligned') {
-                $confidenceDelta = 10;
-            } elseif ($aiAction !== 'HOLD' && $mtfAlignment === 'conflict') {
-                $confidenceDelta = -10;
+        $currentConfidence = $baseConfidence + $confidenceDelta;
+
+        // --- STEP 5: AI refinement (if available) ---
+        $aiAction = null;
+        $aiConfidence = null;
+        $aiAgreement = null; // null = AI not used
+        $aiReasonForRejection = 'AI unavailable';
+
+        if ($aiDecision !== null && $aiDecision->action !== null) {
+            $aiAction = $aiDecision->action;
+            $aiConfidence = $aiDecision->confidence ?? 0;
+
+            // If AI says HOLD but trigger says BUY/SELL, discard AI confidence
+            if ($aiAction === 'HOLD' && $finalAction !== 'HOLD') {
+                $aiAgreement = false;
+                $aiReasonForRejection = 'AI_says_HOLD_but_trigger_says_'.$finalAction;
+                // Keep currentConfidence as-is (base_confidence or adjusted by MTF)
+                Log::info('[DecisionFusionService] AI says HOLD, discarding confidence', [
+                    'trigger_action' => $finalAction,
+                    'current_confidence' => $currentConfidence,
+                ]);
+            } // If AI agrees with trigger action, use max(base, ai_confidence)
+            elseif ($aiAction === $finalAction) {
+                $aiAgreement = true;
+                $newConfidence = max($baseConfidence, $aiConfidence);
+                $confidenceDelta = $newConfidence - $baseConfidence;
+                $currentConfidence = $newConfidence;
+                $flags[] = 'ai_aligned';
+                Log::info('[DecisionFusionService] AI aligned with trigger', [
+                    'trigger_action' => $finalAction,
+                    'ai_confidence' => $aiConfidence,
+                    'adjusted_confidence' => $currentConfidence,
+                ]);
+            } // AI disagrees: discard AI confidence, keep base
+            else {
+                $aiAgreement = false;
+                $aiReasonForRejection = 'AI_action_'.$aiAction.'_conflicts_with_trigger_'.$finalAction;
+                // Keep currentConfidence as-is
+                $flags[] = 'ai_conflict';
+                Log::info('[DecisionFusionService] AI conflicts with trigger, discarding', [
+                    'trigger_action' => $finalAction,
+                    'ai_action' => $aiAction,
+                ]);
             }
-
-            $finalConfidence = max(0, min(100, $aiConfidence + $confidenceDelta));
-            $flags[] = "mtf_alignment_{$mtfAlignment}";
-        } else {
-            // Tier 3: Weak MTF — AI action with reduced confidence
-            $finalAction = $aiAction;
-            $confidenceDelta = -10;
-            $finalConfidence = max(0, min(100, $aiConfidence + $confidenceDelta));
-            $flags[] = 'mtf_weak';
         }
 
-        if ($mode === 'trend_follow' && $absScore >= 0.5 && $finalAction === 'HOLD' && $mtfDirection !== 'HOLD') {
-            $finalAction = $mtfDirection;
-            $finalConfidence = max($finalConfidence, 45);
-            $confidenceDelta = $finalConfidence - $aiConfidence;
-            $flags[] = 'trend_follow_enable';
+        // --- STEP 6: Guardrail (confidence < 45 → HOLD) ---
+        $currentConfidence = max(0, min(100, $currentConfidence));
+
+        if ($currentConfidence < 45) {
+            Log::info('[DecisionFusionService] Guardrail: confidence too low', [
+                'confidence' => $currentConfidence,
+                'reason' => 'guardrail_low_confidence',
+            ]);
+
+            // Guardrail converts action to HOLD and resets confidence to 0 (no trade signal)
+            return [
+                'action' => 'HOLD',
+                'confidence' => 0,
+                'risk_level' => 'HIGH',
+                'reason' => 'Guardrail: confidence below 45',
+                'flags' => $this->normalizeFlags(array_merge($flags, ['guardrail_low_confidence'])),
+                'ai_action' => $aiDecision?->action,
+                'ai_confidence' => $aiDecision?->confidence,
+                'mtf_score' => $mtfContext->mtfScore,
+                'mtf_alignment' => $this->resolveMtfAlignment('HOLD', $finalAction),
+                'context_bias' => $mtfContext->bias,
+                'confidence_delta' => 0 - 55,
+                'trigger_timeframe' => $triggerTimeframe,
+            ];
         }
 
-        $flags[] = "mtf_confidence_delta_{$confidenceDelta}";
         $flags = $this->normalizeFlags($flags);
 
-        $resolvedFinalAlignment = $this->resolveAiAlignment($finalAction, $contextBias);
-
-        Log::info('[DecisionFusionService] Decision computed', [
-            'mtf_score' => $mtfScore,
-            'mtf_action' => $mtfDirection,
-            'ai_action' => $aiAction,
+        Log::info('[DecisionFusionService] Decision computed (signal-first)', [
+            'trigger_timeframe' => $triggerTimeframe,
+            'trigger_score' => $triggerMcpResult->score,
             'final_action' => $finalAction,
-            'confidence_adjustment' => $confidenceDelta,
+            'base_confidence' => $baseConfidence,
+            'confidence_delta' => $confidenceDelta,
+            'current_confidence' => $currentConfidence,
+            'ai_action' => $aiAction,
+            'ai_agreement' => $aiAgreement,
+            'mtf_direction' => $mtfDirection,
+            'mtf_score' => $mtfContext->mtfScore,
+            'mtf_raw_score' => $mtfContext->mtfRawScore,
             'flags' => $flags,
         ]);
 
         return [
             'action' => $finalAction,
-            'confidence' => $finalConfidence,
-            'risk_level' => $this->resolveRiskLevel($finalConfidence),
-            'reason' => (string) $aiDecision['reason'],
+            'confidence' => $currentConfidence,
+            'risk_level' => $this->resolveRiskLevel($currentConfidence),
+            'reason' => 'Signal-first fusion',
             'flags' => $flags,
             'ai_action' => $aiAction,
             'ai_confidence' => $aiConfidence,
-            'mtf_score' => $mtfScore,
-            'mtf_alignment' => $resolvedFinalAlignment,
-            'context_bias' => $contextBias,
+            'ai_agreement' => $aiAgreement,
+            'mtf_score' => $mtfContext->mtfScore,
+            'mtf_alignment' => $this->resolveMtfAlignment($mtfDirection, $finalAction),
+            'context_bias' => $mtfContext->bias,
             'confidence_delta' => $confidenceDelta,
-            'confidence_adjusted' => $finalConfidence,
-            'final_action' => $finalAction,
+            'trigger_timeframe' => $triggerTimeframe,
+            'trigger_score' => $triggerMcpResult->score,
         ];
     }
 
     /**
-     * @param  array<int, string>  $flags
+     * Select best trigger MCP result by score DESC, then timeframe DESC (higher timeframes preferred).
+     * Only considers results with score >= 1 (valid signals).
+     *
+     * @param  array<string, McpResult|null>  $mcpResults  MCP results keyed by timeframe
+     * @return McpResult|null Best trigger result, or null if no valid signal
      */
-    private function resolveTriggerThresholdFromFlags(array $flags): float
+    private function selectBestTrigger(array $mcpResults): ?McpResult
     {
-        if (in_array('signal_activation_conservative', $flags, true)) {
-            return 1.5;
+        $validResults = array_filter(
+            $mcpResults,
+            fn (?McpResult $result) => $result !== null && $result->score >= 1,
+        );
+
+        if (empty($validResults)) {
+            return null;
         }
 
-        if (in_array('signal_activation_aggressive', $flags, true)) {
-            return 0.8;
-        }
+        // Sort by: score DESC (higher scores first), timeframe DESC (higher timeframes when equal scores)
+        usort($validResults, function (McpResult $a, McpResult $b): int {
+            $scoreCompare = $b->score <=> $a->score; // DESC: higher scores first
+            if ($scoreCompare !== 0) {
+                return $scoreCompare;
+            }
+            // When scores are equal, prefer higher timeframe
+            $aMinutes = $this->timeframeToMinutes($a->timeframe);
+            $bMinutes = $this->timeframeToMinutes($b->timeframe);
 
-        return 0.8;
+            return $bMinutes <=> $aMinutes; // DESC: higher timeframes first
+        });
+
+        return reset($validResults);
     }
 
-    private function resolveAiAlignment(string $action, string $contextBias): string
+    /**
+     * @return array<string>
+     */
+    private function sortTimeframesAscending(array $timeframes): array
     {
-        if ($action === 'HOLD' || $contextBias === 'neutral') {
-            return 'neutral';
+        $sorted = array_values(array_unique($timeframes));
+
+        usort($sorted, fn (string $a, string $b): int => $this->timeframeToMinutes($a) <=> $this->timeframeToMinutes($b));
+
+        return $sorted;
+    }
+
+    private function timeframeToMinutes(string $timeframe): int
+    {
+        if (preg_match('/^(\d+)m$/i', trim($timeframe), $matches) === 1) {
+            return (int) $matches[1];
         }
 
-        if (($action === 'BUY' && $contextBias === 'bullish') || ($action === 'SELL' && $contextBias === 'bearish')) {
+        if (preg_match('/^(\d+)h$/i', trim($timeframe), $matches) === 1) {
+            return ((int) $matches[1]) * 60;
+        }
+
+        return PHP_INT_MAX;
+    }
+
+    private function resolveMtfDirection(string $contextBias): string
+    {
+        return match ($contextBias) {
+            'bullish' => 'BUY',
+            'bearish' => 'SELL',
+            default => 'HOLD',
+        };
+    }
+
+    private function resolveMtfAlignment(string $mtfDirection, string $triggerAction): string
+    {
+        if ($mtfDirection === $triggerAction) {
             return 'aligned';
         }
 
-        return 'opposed';
+        if ($mtfDirection === 'HOLD' || $triggerAction === 'HOLD') {
+            return 'neutral';
+        }
+
+        return 'conflict';
     }
 
     private function resolveRiskLevel(int $confidence): string
@@ -243,6 +349,41 @@ class DecisionFusionService
         }
 
         return 'HIGH';
+    }
+
+    /**
+     * @param  array<int, string>  $flags
+     * @return array{
+     *   action: string,
+     *   confidence: int,
+     *   risk_level: string,
+     *   reason: string,
+     *   flags: array<int, string>,
+     *   ai_action: null,
+     *   ai_confidence: null,
+     *   mtf_score: float,
+     *   mtf_alignment: string,
+     *   context_bias: string,
+     *   confidence_delta: int,
+     *   trigger_timeframe: null
+     * }
+     */
+    private function buildHoldDecision(string $reason, float $mtfScore, string $contextBias, array $flags): array
+    {
+        return [
+            'action' => 'HOLD',
+            'confidence' => 0,
+            'risk_level' => 'HIGH',
+            'reason' => $reason,
+            'flags' => $this->normalizeFlags($flags),
+            'ai_action' => null,
+            'ai_confidence' => null,
+            'mtf_score' => $mtfScore,
+            'mtf_alignment' => 'neutral',
+            'context_bias' => $contextBias,
+            'confidence_delta' => 0,
+            'trigger_timeframe' => null,
+        ];
     }
 
     /**
@@ -271,5 +412,19 @@ class DecisionFusionService
         }
 
         return array_values(array_unique($normalized));
+    }
+
+    /**
+     * Legacy method for backward compatibility.
+     *
+     * @deprecated Use fuseOutcomeDto() with new signature instead.
+     */
+    public function fuseDto(AiDecisionDTO $aiDecision, MTFContextDTO $mtfContext): FinalDecisionDTO
+    {
+        // Legacy compatibility: convert old signature to new one
+        $mcpResults = [];
+        $outcome = $this->fuseOutcomeDto($mcpResults, $mtfContext, $aiDecision);
+
+        return $outcome->decision;
     }
 }

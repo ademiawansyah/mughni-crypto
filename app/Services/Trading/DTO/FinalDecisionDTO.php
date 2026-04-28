@@ -24,10 +24,12 @@ readonly class FinalDecisionDTO
         public array $flags,
         public float $mtfScore,
         public string $reason,
+        public ?string $triggerTimeframe = null,
+        public ?int $triggerScore = null, // MCP score of the trigger signal
     ) {}
 
     /**
-     * @return array{action: string, confidence: int, risk_level: string, entry: float|null, take_profit: float|null, stop_loss: float|null, position_size: float|null, flags: array<int, string>, mtf_score: float, reason: string}
+     * @return array{action: string, confidence: int, risk_level: string, entry: float|null, take_profit: float|null, stop_loss: float|null, position_size: float|null, flags: array<int, string>, mtf_score: float, reason: string, trigger_timeframe: string|null}
      */
     public function toArray(): array
     {
@@ -43,6 +45,7 @@ readonly class FinalDecisionDTO
             'flags' => $this->flags,
             'mtf_score' => $this->mtfScore,
             'reason' => $this->reason,
+            'trigger_timeframe' => $this->triggerTimeframe,
         ];
     }
 }

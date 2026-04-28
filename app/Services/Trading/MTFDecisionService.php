@@ -86,6 +86,9 @@ class MTFDecisionService
             + ($rawContextScore * $contextWeight)
             + ($rawTriggerScore * $triggerWeight);
 
+        // Preserve original weighted score before adjustments (reversals, boosts)
+        $mtfRawScore = $mtfScore;
+
         // Step 4: Hard reversal override — non-negotiable when setup is at maximum
         $reversalOverrideActive = false;
         $reversalOverrideAction = null;
@@ -162,6 +165,7 @@ class MTFDecisionService
 
         return new MTFResultDTO(
             mtfScore: $mtfScore,
+            mtfRawScore: round($mtfRawScore, 4),
             preliminaryAction: $preliminaryAction,
             baseConfidence: $baseConfidence,
             mode: $mode,

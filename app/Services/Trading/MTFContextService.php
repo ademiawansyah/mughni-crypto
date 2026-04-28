@@ -42,6 +42,7 @@ class MTFContextService
 
         return new MTFContextDTO(
             mtfScore: $computedContext['mtf_score'],
+            mtfRawScore: $mtfResult->mtfRawScore,
             direction: $computedContext['direction'],
             mode: $computedContext['mode'],
             alignment: $computedContext['alignment'],
@@ -302,11 +303,11 @@ class MTFContextService
 
     private function resolveDirection(float $directionScore): string
     {
-        if ($directionScore > 0.5) {
+        if ($directionScore > 0.3) {
             return 'BUY';
         }
 
-        if ($directionScore < -0.5) {
+        if ($directionScore < -0.3) {
             return 'SELL';
         }
 

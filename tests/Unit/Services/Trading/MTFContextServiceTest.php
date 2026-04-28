@@ -23,6 +23,7 @@ class MTFContextServiceTest extends TestCase
 
         $result = new MTFResultDTO(
             mtfScore: 0.0,
+            mtfRawScore: 0.0,
             preliminaryAction: 'HOLD',
             baseConfidence: 50,
             mode: 'trend_follow',
@@ -60,6 +61,7 @@ class MTFContextServiceTest extends TestCase
 
         $result = new MTFResultDTO(
             mtfScore: 0.0,
+            mtfRawScore: 0.0,
             preliminaryAction: 'HOLD',
             baseConfidence: 50,
             mode: 'trend_follow',
