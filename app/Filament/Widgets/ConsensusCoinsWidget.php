@@ -49,7 +49,7 @@ class ConsensusCoinsWidget extends TableWidget
     protected function consensusQuery(): Builder
     {
         return AiDecision::query()
-            ->selectRaw('coin, COUNT(DISTINCT model) as model_count, MAX(confidence) as max_confidence, MAX(timestamp) as last_seen_at')
+            ->selectRaw('MIN(id) as id, coin, COUNT(DISTINCT model) as model_count, MAX(confidence) as max_confidence, MAX(timestamp) as last_seen_at')
             ->whereNotNull('model')
             ->where('timestamp', '>=', now()->subDay())
             ->groupBy('coin')

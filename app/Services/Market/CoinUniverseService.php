@@ -2,6 +2,7 @@
 
 namespace App\Services\Market;
 
+use App\Models\Coin;
 use App\Services\External\BinanceFuturesService;
 use App\Services\External\CoinGeckoService;
 use Illuminate\Support\Facades\Cache;
@@ -58,12 +59,13 @@ class CoinUniverseService
     /**
      * Maximum number of coins in universe
      */
-    private const MAX_COINS = 100;
+    private const MAX_COINS = 200;
 
     /**
      * Stablecoin CoinGecko IDs to exclude
      */
     private const STABLECOINS = [
+        'bitcoin',
         'tether',
         'usd-coin',
         'binance-usd',
@@ -104,7 +106,10 @@ class CoinUniverseService
     public function updateUniverse(string $executionId = ''): array
     {
         $coins = $this->fetchAndFilterCoins();
-
+        Log::info('[CoinUniverseService] Fetched and filtered coins', [
+            'execution_id' => $executionId,
+            'filtered_count' => count($coins),
+        ]);
         if ($coins === []) {
             $existingUniverse = $this->getCachedUniverse();
 
@@ -123,6 +128,24 @@ class CoinUniverseService
         }
 
         // Cache the result
+        // save to database (coin_universe table)
+        foreach ($coins as $coinData) {
+            Coin::updateOrCreate(
+                ['symbol' => $coinData['symbol']],
+                [
+                    'name' => $coinData['name'],
+                    'image' => $coinData['image'],
+                    'coin_gecko_id' => $coinData['coin_gecko_id'] ?? null,
+                    'raw_data' => $coinData['raw_data'] ?? null,
+                    'coin_data_last_updated' => $coinData['coin_data_last_updated'] ?? null,
+                    'last_fetched_at' => $coinData['last_fetched_at'] ?? null,
+                    'market_cap' => $coinData['market_cap'] ?? null,
+                    'volume_24h' => $coinData['volume_24h'] ?? null,
+                    'current_price' => $coinData['current_price'] ?? null,
+                ]
+            );
+        }
+
         Cache::put(self::CACHE_KEY, $coins, self::CACHE_TTL);
 
         Log::info('[CoinUniverseService] Universe updated', [
@@ -159,20 +182,27 @@ class CoinUniverseService
 
         $baseFiltered = array_values(array_filter(
             $coins,
-            fn (array $coin): bool => $this->passesBaseFilters($coin),
+            fn(array $coin): bool => $this->passesBaseFilters($coin),
         ));
 
-        $enriched = array_map(
-            fn (array $coin): array => $this->enrichWithDerivatives($coin),
-            $baseFiltered,
-        );
+        // Disabled derivatives enrichment step since doesnt have Binance API
+        // $enriched = array_map(
+        //     fn(array $coin): array => $this->enrichWithDerivatives($coin),
+        //     $baseFiltered,
+        // );
 
         $filtered = array_values(array_filter(
-            $enriched,
-            fn (array $coin): bool => $this->passesAllFilters($coin),
+            $baseFiltered,
+            fn(array $coin): bool => $this->passesAllFilters($coin),
         ));
 
-        usort($filtered, fn (array $a, array $b): int => ($b['market_cap'] <=> $a['market_cap']) ?: ($b['open_interest_usd'] <=> $a['open_interest_usd']));
+        Log::info('[CoinUniverseService] Applied filters to coins', [
+            'total_fetched' => count($coins),
+            'after_base_filters' => count($baseFiltered),
+            'after_all_filters' => count($filtered),
+        ]);
+
+        usort($filtered, fn(array $a, array $b): int => ($b['market_cap'] <=> $a['market_cap']) ?: ($b['open_interest_usd'] <=> $a['open_interest_usd']));
 
         return array_slice($filtered, 0, self::MAX_COINS);
     }
@@ -206,7 +236,13 @@ class CoinUniverseService
     }
 
     /**
-     * Evaluate whether a coin passes all filter criteria including OI and futures availability.
+     * Evaluate whether a coin passes all filter criteria.
+     *
+     * Note: The Binance futures availability check and OI filter are only applied when
+     * enrichWithDerivatives() has been run (i.e. has_binance_futures and open_interest_usd
+     * are present on the coin array). CoinGecko /coins/markets does not provide OI data —
+     * that field comes exclusively from the Binance Futures /fapi/v1/openInterest endpoint.
+     * While derivatives enrichment is disabled, only base filters apply.
      *
      * @param  array{coin: string, symbol: string, market_cap: float|null, volume_24h: float|null, has_binance_futures?: bool, open_interest_usd?: float|null}  $coin
      */
@@ -216,11 +252,20 @@ class CoinUniverseService
             return false;
         }
 
-        if (($coin['has_binance_futures'] ?? false) !== true) {
-            return false;
+        // OI and Binance futures checks are only meaningful after enrichWithDerivatives() runs.
+        // When derivatives enrichment is disabled, skip these checks to avoid silently
+        // filtering out all coins (open_interest_usd would be 0 for every coin).
+        if (isset($coin['has_binance_futures'])) {
+            if ($coin['has_binance_futures'] !== true) {
+                return false;
+            }
+
+            if (($coin['open_interest_usd'] ?? 0.0) < self::MIN_OPEN_INTEREST_USD) {
+                return false;
+            }
         }
 
-        return ($coin['open_interest_usd'] ?? 0.0) >= self::MIN_OPEN_INTEREST_USD;
+        return true;
     }
 
     /**
@@ -233,6 +278,9 @@ class CoinUniverseService
      */
     private function getCoinsFromCoinGecko(): array
     {
+        Log::info('[CoinUniverseService] Fetching coins from CoinGecko', [
+            'timestamp' => now()->toIso8601String(),
+        ]);
         $result = [];
         $maxPages = 4;
 
@@ -246,18 +294,38 @@ class CoinUniverseService
             foreach ($batch as $item) {
                 $result[] = [
                     'coin' => $item['id'],
+                    'coin_gecko_id' => $item['id'],
                     'symbol' => $item['symbol'],
+                    'name' => $item['name'],
+                    'image' => $item['image'] ?? '',
                     'market_cap' => $item['market_cap'] ?? 0.0,
                     'volume_24h' => $item['total_volume'] ?? 0.0,
                     'current_price' => $item['current_price'] ?? 0.0,
+                    'coin_data_last_updated' => $item['last_updated'] ?? '',
+                    'last_fetched_at' => now()->toIso8601String(),
+                    'raw_data' => json_decode((string) json_encode($item), true) ?? [],
+                    // json_encode → json_decode ensures the value is a clean,
+                    // JSON-serializable array (no objects, closures, or resource types)
+                    // before it is stored in the JSONB column via the model cast.
                 ];
             }
+
+            // get sample of result for logging
+            Log::info('[CoinUniverseService] Fetched batch of coins from CoinGecko', [
+                'page' => $page,
+                'batch_count' => count($batch),
+                'sample_coins' => array_slice($batch, 0, 5),
+            ]);
 
             // Stop paginating once we receive a partial page
             if (count($batch) < 250) {
                 break;
             }
         }
+
+        Log::info('[CoinUniverseService] Completed fetching coins from CoinGecko', [
+            'total_fetched' => count($result),
+        ]);
 
         return $result;
     }
@@ -295,6 +363,6 @@ class CoinUniverseService
             return '';
         }
 
-        return str_ends_with($clean, 'USDT') ? $clean : ($clean.'USDT');
+        return str_ends_with($clean, 'USDT') ? $clean : ($clean . 'USDT');
     }
 }

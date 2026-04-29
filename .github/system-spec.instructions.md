@@ -235,7 +235,6 @@ Use public APIs only.
 - Consider price at OB when close is inside zone with small tolerance.
 
 ### 10.5 Coin Universe
-- Prefer full Binance futures universe for broad coverage.
 - Minimum volume filter: above 5 million USD per 24H.
 - Minimum OI filter: above 1 million USD.
 - Exclude stablecoin style pairs.

@@ -97,6 +97,9 @@ class CoinGeckoService
         ];
 
         try {
+            Log::info('[CoinGeckoService] Sending request to /coins/markets', [
+                'parameters' => $parameters,
+            ]);
             $response = $request->get('/coins/markets', $parameters);
         } catch (ConnectionException $e) {
             Log::error('[CoinGeckoService] Connection failed on /coins/markets', [
@@ -121,7 +124,9 @@ class CoinGeckoService
         /** @var array<int, array<string, mixed>> $data */
         $data = $response->json() ?? [];
 
-        return array_map(fn (array $coin): array => [
+        return $data;
+
+        return array_map(fn(array $coin): array => [
             'id' => (string) ($coin['id'] ?? ''),
             'symbol' => strtoupper((string) ($coin['symbol'] ?? '')),
             'market_cap' => is_numeric($coin['market_cap'] ?? null) ? (float) $coin['market_cap'] : null,
@@ -155,6 +160,10 @@ class CoinGeckoService
         }
 
         try {
+            Log::info('[CoinGeckoService] Sending request to /coins/{id}/market_chart', [
+                'coin' => $coin,
+                'parameters' => $params,
+            ]);
             $response = $request->get("/coins/{$coin}/market_chart", $params);
         } catch (ConnectionException $e) {
             Log::error('[CoinGeckoService] Connection failed', [
@@ -178,7 +187,7 @@ class CoinGeckoService
         $rawResponse = $response->json();
 
         // Extract only the price values from the [timestamp, price] pairs.
-        $prices = array_map(fn ($item) => (float) $item[1], $rawResponse['prices'] ?? []);
+        $prices = array_map(fn($item) => (float) $item[1], $rawResponse['prices'] ?? []);
 
         return [
             'request_params' => array_merge(['coin' => $coin], $params),
