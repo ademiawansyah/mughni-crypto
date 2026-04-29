@@ -65,6 +65,7 @@ class FetchMarketJob implements ShouldQueue
         }
 
         $coins = $this->resolveCoins($coinUniverseService);
+
         $timeframes = $this->resolveSortedTimeframes();
 
         if ($coins === []) {
@@ -101,9 +102,13 @@ class FetchMarketJob implements ShouldQueue
     /**
      * Resolve candidate coins for ingestion.
      *
-     * Priority:
-     * 1. Cached dynamic universe from UpdateCoinUniverseJob.
-     * 2. GeneralConfig coins fallback.
+     * Coins are sourced exclusively from the cached Binance futures universe
+     * maintained by UpdateCoinUniverseJob. If the cache is empty (i.e. the
+     * universe has not been seeded yet), this returns an empty array and the
+     * job will skip execution gracefully.
+     *
+     * Manual coin lists from GeneralConfig are intentionally NOT used here;
+     * the spec requires the full Binance futures universe as the data source.
      *
      * @return array<string>
      */
@@ -116,13 +121,6 @@ class FetchMarketJob implements ShouldQueue
             static fn (array $entry): string => trim((string) ($entry['coin'] ?? '')),
             $cachedUniverse,
         )));
-
-        if ($coins === []) {
-            /** @var array<string> $fallbackCoins */
-            $fallbackCoins = GeneralConfig::getCoins();
-
-            return array_values(array_unique(array_filter($fallbackCoins, fn (string $coin): bool => trim($coin) !== '')));
-        }
 
         return array_values(array_unique($coins));
     }
@@ -148,6 +146,10 @@ class FetchMarketJob implements ShouldQueue
 
         if (preg_match('/^(\d+)h$/i', trim($timeframe), $matches) === 1) {
             return ((int) $matches[1]) * 60;
+        }
+
+        if (preg_match('/^(\d+)d$/i', trim($timeframe), $matches) === 1) {
+            return ((int) $matches[1]) * 60 * 24;
         }
 
         return PHP_INT_MAX;

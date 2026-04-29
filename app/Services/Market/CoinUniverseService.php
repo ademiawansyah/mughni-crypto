@@ -127,7 +127,6 @@ class CoinUniverseService
             ]);
         }
 
-        // Cache the result
         // save to database (coin_universe table)
         foreach ($coins as $coinData) {
             Coin::updateOrCreate(
@@ -146,6 +145,7 @@ class CoinUniverseService
             );
         }
 
+        // Cache the result in Redis with TTL
         Cache::put(self::CACHE_KEY, $coins, self::CACHE_TTL);
 
         Log::info('[CoinUniverseService] Universe updated', [
@@ -182,7 +182,7 @@ class CoinUniverseService
 
         $baseFiltered = array_values(array_filter(
             $coins,
-            fn(array $coin): bool => $this->passesBaseFilters($coin),
+            fn (array $coin): bool => $this->passesBaseFilters($coin),
         ));
 
         // Disabled derivatives enrichment step since doesnt have Binance API
@@ -193,7 +193,7 @@ class CoinUniverseService
 
         $filtered = array_values(array_filter(
             $baseFiltered,
-            fn(array $coin): bool => $this->passesAllFilters($coin),
+            fn (array $coin): bool => $this->passesAllFilters($coin),
         ));
 
         Log::info('[CoinUniverseService] Applied filters to coins', [
@@ -202,7 +202,7 @@ class CoinUniverseService
             'after_all_filters' => count($filtered),
         ]);
 
-        usort($filtered, fn(array $a, array $b): int => ($b['market_cap'] <=> $a['market_cap']) ?: ($b['open_interest_usd'] <=> $a['open_interest_usd']));
+        usort($filtered, fn (array $a, array $b): int => ($b['market_cap'] <=> $a['market_cap']) ?: ($b['open_interest_usd'] <=> $a['open_interest_usd']));
 
         return array_slice($filtered, 0, self::MAX_COINS);
     }
@@ -363,6 +363,6 @@ class CoinUniverseService
             return '';
         }
 
-        return str_ends_with($clean, 'USDT') ? $clean : ($clean . 'USDT');
+        return str_ends_with($clean, 'USDT') ? $clean : ($clean.'USDT');
     }
 }

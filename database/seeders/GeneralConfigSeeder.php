@@ -20,7 +20,7 @@ class GeneralConfigSeeder extends Seeder
     {
         $defaults = [
             'coins' => 'bitcoin,ethereum,solana,tether,xrp',
-            'timeframes' => '5m,10m,15m',
+            'timeframes' => '15m,1h,4h,8h,1d',
             'cron_enabled' => '1',
             'counter_trend_enabled' => '1',
             'pre_pump_enabled' => '1',
