@@ -72,6 +72,20 @@ class PrePumpJob implements ShouldQueue
                 'signal_count' => $signals->count(),
             ]);
 
+            if ($signals->isEmpty()) {
+                $persistenceService->persistNoSignalDecision(
+                    model: 'pre_pump',
+                    marketRegime: $marketRegime,
+                    executionId: $executionId,
+                    timeframe: '1h',
+                );
+
+                Log::info('[PrePumpJob] Persisted fallback HOLD decision', [
+                    'execution_id' => $executionId,
+                    'reason' => 'no_candidates_passed',
+                ]);
+            }
+
             // Process each signal through AI layer + persistence + notification
             $signals->each(function ($signal) use (
                 $executionId,
@@ -109,7 +123,7 @@ class PrePumpJob implements ShouldQueue
                 }
 
                 // Send notification if action is BUY/SELL and confidence meets threshold
-                $notificationThreshold = (int) config('notifications.pre_pump.confidence_threshold', 75);
+                $notificationThreshold = (int) config('models.notifications.pre_pump.confidence_threshold', 75);
 
                 if (
                     in_array($aiDecision['action'], ['BUY', 'SELL'], true)

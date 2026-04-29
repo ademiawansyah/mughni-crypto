@@ -2,11 +2,13 @@
 
 namespace App\Filament\Pages;
 
-use App\Filament\Widgets\DecisionAuthorityChainWidget;
-use App\Filament\Widgets\ExecutionTraceabilityTableWidget;
-use App\Filament\Widgets\McpGateHealthWidget;
-use App\Filament\Widgets\NotificationEligibilityWidget;
+use App\Filament\Widgets\ConsensusCoinsWidget;
+use App\Filament\Widgets\CounterTrendSignalsTableWidget;
+use App\Filament\Widgets\HighestConvictionSignalsWidget;
+use App\Filament\Widgets\ModelExecutionHistoryWidget;
+use App\Filament\Widgets\MomentumSignalsTableWidget;
 use App\Filament\Widgets\PerModelScorecardWidget;
+use App\Filament\Widgets\PrePumpSignalsTableWidget;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
 use UnitEnum;
@@ -37,11 +39,13 @@ class ModelOpsPage extends Page
     protected function getHeaderWidgets(): array
     {
         return [
-            McpGateHealthWidget::class,
-            DecisionAuthorityChainWidget::class,
-            ExecutionTraceabilityTableWidget::class,
             PerModelScorecardWidget::class,
-            NotificationEligibilityWidget::class,
+            CounterTrendSignalsTableWidget::class,
+            PrePumpSignalsTableWidget::class,
+            MomentumSignalsTableWidget::class,
+            ModelExecutionHistoryWidget::class,
+            HighestConvictionSignalsWidget::class,
+            ConsensusCoinsWidget::class,
         ];
     }
 

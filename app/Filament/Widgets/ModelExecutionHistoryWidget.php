@@ -19,16 +19,17 @@ class ModelExecutionHistoryWidget extends TableWidget
         return $table
             ->query($this->executionHistoryQuery())
             ->defaultSort('executed_at', 'desc')
+            ->defaultKeySort(false)
             ->paginated([10])
             ->defaultPaginationPageOption(10)
             ->columns([
                 TextColumn::make('execution_id')
                     ->label('Execution')
-                    ->state(fn($record): string => substr((string) $record->execution_id, 0, 8)),
+                    ->state(fn ($record): string => substr((string) $record->execution_id, 0, 8)),
 
                 TextColumn::make('model')
                     ->badge()
-                    ->formatStateUsing(fn(?string $state): string => match ($state) {
+                    ->formatStateUsing(fn (?string $state): string => match ($state) {
                         'counter_trend' => 'Counter-Trend',
                         'pre_pump' => 'Pre-Pump',
                         'momentum' => 'Momentum',

@@ -19,6 +19,7 @@ class ConsensusCoinsWidget extends TableWidget
         return $table
             ->query($this->consensusQuery())
             ->defaultSort('model_count', 'desc')
+            ->defaultKeySort(false)
             ->paginated([10])
             ->defaultPaginationPageOption(10)
             ->columns([
@@ -29,7 +30,7 @@ class ConsensusCoinsWidget extends TableWidget
                 TextColumn::make('model_count')
                     ->label('Models')
                     ->badge()
-                    ->color(fn(int $state): string => $state >= 3 ? 'success' : 'warning')
+                    ->color(fn (int $state): string => $state >= 3 ? 'success' : 'warning')
                     ->sortable(),
 
                 TextColumn::make('max_confidence')

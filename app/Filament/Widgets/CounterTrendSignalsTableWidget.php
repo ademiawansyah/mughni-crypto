@@ -4,7 +4,7 @@ namespace App\Filament\Widgets;
 
 class CounterTrendSignalsTableWidget extends ModelSignalsTableWidget
 {
-    protected static ?string $heading = 'Counter-Trend Signals';
+    protected static ?string $heading = 'Top 10 Counter-Trend Signals';
 
     protected function modelKey(): string
     {

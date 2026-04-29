@@ -14,9 +14,9 @@ class CounterTrendModelService extends AbstractMarketModelService
     public function evaluateCoin(string $coin, ?array $indicators = null): ?ModelSignalDTO
     {
         $resolvedIndicators = $indicators ?? $this->resolveIndicators($coin);
-        $entry = $resolvedIndicators['5m'] ?? null;
-        $setup = $resolvedIndicators['10m'] ?? null;
-        $macro = $resolvedIndicators['15m'] ?? null;
+        $entry = $resolvedIndicators['15m'] ?? null;
+        $setup = $resolvedIndicators['1h'] ?? null;
+        $macro = $resolvedIndicators['4h'] ?? $resolvedIndicators['1h'] ?? null;
 
         if ($entry === null || $setup === null || $macro === null) {
             return null;
@@ -45,7 +45,7 @@ class CounterTrendModelService extends AbstractMarketModelService
             coin: $coin,
             action: $liquiditySweep['direction'],
             score: $score,
-            primaryTimeframe: '5m',
+            primaryTimeframe: '15m',
             componentScores: $componentScores,
             context: [
                 'market_regime' => $marketRegime['market_regime'] ?? 'RANGING',
@@ -72,8 +72,8 @@ class CounterTrendModelService extends AbstractMarketModelService
      */
     public function detectLiquiditySweep(array $indicators): array
     {
-        $entry = $indicators['5m'] ?? null;
-        $macro = $indicators['15m'] ?? null;
+        $entry = $indicators['15m'] ?? null;
+        $macro = $indicators['4h'] ?? $indicators['1h'] ?? null;
 
         if ($entry === null || ! is_numeric($entry['rsi'] ?? null)) {
             return [
@@ -139,9 +139,9 @@ class CounterTrendModelService extends AbstractMarketModelService
      */
     public function detectMarketStructureShift(array $indicators): bool
     {
-        $entryTrend = $indicators['5m']['trend'] ?? null;
-        $setupTrend = $indicators['10m']['trend'] ?? null;
-        $macroTrend = $indicators['15m']['trend'] ?? null;
+        $entryTrend = $indicators['15m']['trend'] ?? null;
+        $setupTrend = $indicators['1h']['trend'] ?? null;
+        $macroTrend = $indicators['4h']['trend'] ?? $indicators['1h']['trend'] ?? null;
 
         if (! is_string($entryTrend) || ! is_string($setupTrend) || ! is_string($macroTrend)) {
             return false;
@@ -153,13 +153,29 @@ class CounterTrendModelService extends AbstractMarketModelService
     }
 
     /**
-     * Placeholder until trade-flow data is stored alongside indicators.
+     * Detect CVD divergence against short-term price direction.
      *
      * @param  array<string, array<string, mixed>|null>  $indicators
      */
     public function calculateCVDDivergence(array $indicators): bool
     {
-        return false;
+        $entryPrice = is_numeric($indicators['15m']['price'] ?? null) ? (float) $indicators['15m']['price'] : null;
+        $setupPrice = is_numeric($indicators['1h']['price'] ?? null) ? (float) $indicators['1h']['price'] : null;
+        $cvdSlope = is_numeric($indicators['15m']['cvd_slope'] ?? null) ? (float) $indicators['15m']['cvd_slope'] : null;
+
+        if ($entryPrice === null || $setupPrice === null || $cvdSlope === null) {
+            return false;
+        }
+
+        $priceDelta = $entryPrice - $setupPrice;
+
+        // Bullish divergence: price lower while CVD slope turns positive.
+        if ($priceDelta < 0.0 && $cvdSlope > 0.0) {
+            return true;
+        }
+
+        // Bearish divergence: price higher while CVD slope turns negative.
+        return $priceDelta > 0.0 && $cvdSlope < 0.0;
     }
 
     /**
@@ -173,22 +189,39 @@ class CounterTrendModelService extends AbstractMarketModelService
     public function calculateComponentScores(array $indicators): array
     {
         $liquiditySweep = $this->detectLiquiditySweep($indicators);
-        $entry = $indicators['5m'] ?? [];
-        $setup = $indicators['10m'] ?? [];
-        $macro = $indicators['15m'] ?? [];
+        $entry = $indicators['15m'] ?? [];
+        $setup = $indicators['1h'] ?? [];
+        $macro = $indicators['4h'] ?? $indicators['1h'] ?? [];
         $entryTrend = (string) ($entry['trend'] ?? 'sideways');
         $setupTrend = (string) ($setup['trend'] ?? 'sideways');
         $mssScore = $this->detectMarketStructureShift($indicators)
             ? 1.0
             : ($entryTrend !== 'sideways' && $entryTrend === $setupTrend ? 0.6 : 0.2);
         $volatility = is_numeric($macro['volatility'] ?? null) ? (float) $macro['volatility'] : null;
+        $entryOpenInterest = is_numeric($entry['open_interest'] ?? null) ? (float) $entry['open_interest'] : null;
+        $setupOpenInterest = is_numeric($setup['open_interest'] ?? null) ? (float) $setup['open_interest'] : null;
+        $entryFunding = is_numeric($entry['funding_rate'] ?? null) ? (float) $entry['funding_rate'] : null;
+        $macroFunding = is_numeric($macro['funding_rate'] ?? null) ? (float) $macro['funding_rate'] : null;
+
+        $oiScore = 0.0;
+        if ($entryOpenInterest !== null && $setupOpenInterest !== null && $setupOpenInterest > 0.0) {
+            $change = ($entryOpenInterest - $setupOpenInterest) / $setupOpenInterest;
+            $oiScore = $change <= -0.03 ? 1.0 : ($change <= 0.0 ? 0.6 : 0.2);
+        }
+
+        $fundingScore = 0.0;
+        if ($entryFunding !== null && $macroFunding !== null) {
+            $entryAbs = abs($entryFunding);
+            $macroAbs = abs($macroFunding);
+            $fundingScore = $entryAbs <= $macroAbs ? 1.0 : 0.25;
+        }
 
         return [
             'sweep' => $liquiditySweep['strength'],
             'mss' => $mssScore,
-            'oi' => 0.5,
-            'cvd' => $this->calculateCVDDivergence($indicators) ? 1.0 : 0.5,
-            'funding' => 0.5,
+            'oi' => $oiScore,
+            'cvd' => $this->calculateCVDDivergence($indicators) ? 1.0 : 0.0,
+            'funding' => $fundingScore,
             'atr' => $volatility === null ? 0.0 : ($volatility >= 0.04 ? 1.0 : 0.5),
         ];
     }
@@ -200,7 +233,7 @@ class CounterTrendModelService extends AbstractMarketModelService
     public function rankTopCoins(Collection $signals): Collection
     {
         return $signals
-            ->sortByDesc(fn(ModelSignalDTO $signal): int => $signal->score)
+            ->sortByDesc(fn (ModelSignalDTO $signal): int => $signal->score)
             ->take(10)
             ->values();
     }
@@ -210,7 +243,7 @@ class CounterTrendModelService extends AbstractMarketModelService
      */
     protected function requiredTimeframes(): array
     {
-        return ['5m', '10m', '15m'];
+        return ['15m', '1h', '4h'];
     }
 
     protected function modelKey(): string

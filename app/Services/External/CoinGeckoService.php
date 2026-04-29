@@ -74,11 +74,11 @@ class CoinGeckoService
      * Fetch paginated market data from /coins/markets.
      *
      * Returns a flat list of coin entries per page, or an empty array on failure.
-     * Each entry includes: id, market_cap, total_volume, symbol.
+     * Each entry includes: id, market_cap, total_volume, current_price, symbol.
      *
      * @param  int  $page  Page number (1-indexed)
      * @param  int  $perPage  Results per page (max 250)
-     * @return array<int, array{id: string, symbol: string, market_cap: float|null, total_volume: float|null}>
+     * @return array<int, array{id: string, symbol: string, market_cap: float|null, total_volume: float|null, current_price: float|null}>
      */
     public function fetchCoinMarkets(int $page = 1, int $perPage = 250): array
     {
@@ -112,7 +112,7 @@ class CoinGeckoService
             Log::error('[CoinGeckoService] HTTP request failed on /coins/markets', [
                 'status' => $response->status(),
                 'error' => $response->body(),
-                'parameters' => $parameters
+                'parameters' => $parameters,
             ]);
 
             return [];
@@ -121,11 +121,12 @@ class CoinGeckoService
         /** @var array<int, array<string, mixed>> $data */
         $data = $response->json() ?? [];
 
-        return array_map(fn(array $coin): array => [
+        return array_map(fn (array $coin): array => [
             'id' => (string) ($coin['id'] ?? ''),
             'symbol' => strtoupper((string) ($coin['symbol'] ?? '')),
             'market_cap' => is_numeric($coin['market_cap'] ?? null) ? (float) $coin['market_cap'] : null,
             'total_volume' => is_numeric($coin['total_volume'] ?? null) ? (float) $coin['total_volume'] : null,
+            'current_price' => is_numeric($coin['current_price'] ?? null) ? (float) $coin['current_price'] : null,
         ], $data);
     }
 
@@ -177,7 +178,7 @@ class CoinGeckoService
         $rawResponse = $response->json();
 
         // Extract only the price values from the [timestamp, price] pairs.
-        $prices = array_map(fn($item) => (float) $item[1], $rawResponse['prices'] ?? []);
+        $prices = array_map(fn ($item) => (float) $item[1], $rawResponse['prices'] ?? []);
 
         return [
             'request_params' => array_merge(['coin' => $coin], $params),

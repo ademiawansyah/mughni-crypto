@@ -2,6 +2,7 @@
 
 namespace App\Services\Market;
 
+use App\Services\External\BinanceFuturesService;
 use App\Services\External\CoinGeckoService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -50,6 +51,11 @@ class CoinUniverseService
     private const MIN_VOLUME_24H = 5_000_000; // $5M
 
     /**
+     * Minimum open interest notional in USD.
+     */
+    private const MIN_OPEN_INTEREST_USD = 1_000_000; // $1M
+
+    /**
      * Maximum number of coins in universe
      */
     private const MAX_COINS = 100;
@@ -79,6 +85,7 @@ class CoinUniverseService
 
     public function __construct(
         private readonly CoinGeckoService $coinGeckoService,
+        private readonly BinanceFuturesService $binanceFuturesService,
     ) {}
 
     /**
@@ -150,22 +157,30 @@ class CoinUniverseService
     {
         $coins = $this->getCoinsFromCoinGecko();
 
-        $filtered = array_values(array_filter(
+        $baseFiltered = array_values(array_filter(
             $coins,
+            fn (array $coin): bool => $this->passesBaseFilters($coin),
+        ));
+
+        $enriched = array_map(
+            fn (array $coin): array => $this->enrichWithDerivatives($coin),
+            $baseFiltered,
+        );
+
+        $filtered = array_values(array_filter(
+            $enriched,
             fn (array $coin): bool => $this->passesAllFilters($coin),
         ));
 
-        usort($filtered, fn (array $a, array $b): int => $b['market_cap'] <=> $a['market_cap']);
+        usort($filtered, fn (array $a, array $b): int => ($b['market_cap'] <=> $a['market_cap']) ?: ($b['open_interest_usd'] <=> $a['open_interest_usd']));
 
         return array_slice($filtered, 0, self::MAX_COINS);
     }
 
     /**
-     * Evaluate whether a coin passes all filter criteria.
-     *
      * @param  array{coin: string, symbol: string, market_cap: float|null, volume_24h: float|null}  $coin
      */
-    private function passesAllFilters(array $coin): bool
+    private function passesBaseFilters(array $coin): bool
     {
         if (($coin['market_cap'] ?? 0.0) < self::MIN_MARKET_CAP) {
             return false;
@@ -191,12 +206,30 @@ class CoinUniverseService
     }
 
     /**
+     * Evaluate whether a coin passes all filter criteria including OI and futures availability.
+     *
+     * @param  array{coin: string, symbol: string, market_cap: float|null, volume_24h: float|null, has_binance_futures?: bool, open_interest_usd?: float|null}  $coin
+     */
+    private function passesAllFilters(array $coin): bool
+    {
+        if (! $this->passesBaseFilters($coin)) {
+            return false;
+        }
+
+        if (($coin['has_binance_futures'] ?? false) !== true) {
+            return false;
+        }
+
+        return ($coin['open_interest_usd'] ?? 0.0) >= self::MIN_OPEN_INTEREST_USD;
+    }
+
+    /**
      * Fetch coins from CoinGecko /coins/markets (paginated).
      *
      * Fetches up to 4 pages of 250 results each (1 000 coins total) and stops
      * early if a page returns fewer than 250 results.
      *
-     * @return array<int, array{coin: string, symbol: string, market_cap: float, volume_24h: float}>
+     * @return array<int, array{coin: string, symbol: string, market_cap: float, volume_24h: float, current_price: float}>
      */
     private function getCoinsFromCoinGecko(): array
     {
@@ -216,6 +249,7 @@ class CoinUniverseService
                     'symbol' => $item['symbol'],
                     'market_cap' => $item['market_cap'] ?? 0.0,
                     'volume_24h' => $item['total_volume'] ?? 0.0,
+                    'current_price' => $item['current_price'] ?? 0.0,
                 ];
             }
 
@@ -226,5 +260,41 @@ class CoinUniverseService
         }
 
         return $result;
+    }
+
+    /**
+     * @param  array{coin: string, symbol: string, market_cap: float, volume_24h: float, current_price: float}  $coin
+     * @return array{coin: string, symbol: string, market_cap: float, volume_24h: float, current_price: float, has_binance_futures: bool, open_interest_usd: float}
+     */
+    private function enrichWithDerivatives(array $coin): array
+    {
+        $symbol = $this->normalizeBinanceSymbol((string) $coin['symbol']);
+        $hasBinanceFutures = $symbol !== '' && $this->binanceFuturesService->hasPerpetualUsdtSymbol($symbol);
+
+        $openInterestUsd = 0.0;
+
+        if ($hasBinanceFutures) {
+            $openInterestUsd = (float) ($this->binanceFuturesService->fetchOpenInterestUsd(
+                $symbol,
+                (float) ($coin['current_price'] ?? 0.0),
+            ) ?? 0.0);
+        }
+
+        return [
+            ...$coin,
+            'has_binance_futures' => $hasBinanceFutures,
+            'open_interest_usd' => $openInterestUsd,
+        ];
+    }
+
+    private function normalizeBinanceSymbol(string $symbol): string
+    {
+        $clean = strtoupper(trim($symbol));
+
+        if ($clean === '') {
+            return '';
+        }
+
+        return str_ends_with($clean, 'USDT') ? $clean : ($clean.'USDT');
     }
 }

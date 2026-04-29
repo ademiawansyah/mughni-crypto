@@ -1,5 +1,5 @@
 <x-filament-panels::page>
     <div class="text-sm text-gray-600 dark:text-gray-300">
-        Operational workspace for MCP gating, advisory-to-authority chain visibility, execution traceability, model scorecards, and notification eligibility.
+        Spec-aligned operations dashboard for three independent models with Top 10 ranked signals, component-level score transparency, and model execution traceability.
     </div>
 </x-filament-panels::page>

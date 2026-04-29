@@ -25,8 +25,8 @@ abstract class AbstractMarketModelService
     public function evaluateUniverse(string $executionId = ''): Collection
     {
         $signals = $this->resolveCandidateCoins()
-            ->map(fn(string $coin): ?ModelSignalDTO => $this->evaluateCoin($coin))
-            ->filter(fn(?ModelSignalDTO $signal): bool => $signal !== null)
+            ->map(fn (string $coin): ?ModelSignalDTO => $this->evaluateCoin($coin))
+            ->filter(fn (?ModelSignalDTO $signal): bool => $signal !== null)
             ->values();
 
         $rankedSignals = $this->rankTopCoins($signals);
@@ -80,15 +80,15 @@ abstract class AbstractMarketModelService
     {
         $universe = collect($this->coinUniverseService->getCachedUniverse())
             ->pluck('coin')
-            ->filter(fn(mixed $coin): bool => is_string($coin) && $coin !== '');
+            ->filter(fn (mixed $coin): bool => is_string($coin) && $coin !== '');
 
         if ($universe->isEmpty()) {
             $universe = collect(GeneralConfig::getCoins());
         }
 
         return $universe
-            ->map(fn(mixed $coin): string => (string) $coin)
-            ->filter(fn(string $coin): bool => $coin !== '')
+            ->map(fn (mixed $coin): string => (string) $coin)
+            ->filter(fn (string $coin): bool => $coin !== '')
             ->unique()
             ->values();
     }
@@ -135,6 +135,10 @@ abstract class AbstractMarketModelService
             'ema21' => is_numeric($attributes['ema21'] ?? null) ? (float) $attributes['ema21'] : null,
             'trend' => (string) ($attributes['trend'] ?? 'sideways'),
             'volatility' => is_numeric($attributes['volatility'] ?? null) ? (float) $attributes['volatility'] : null,
+            'open_interest' => is_numeric($attributes['open_interest'] ?? null) ? (float) $attributes['open_interest'] : null,
+            'funding_rate' => is_numeric($attributes['funding_rate'] ?? null) ? (float) $attributes['funding_rate'] : null,
+            'cvd' => is_numeric($attributes['cvd'] ?? null) ? (float) $attributes['cvd'] : null,
+            'cvd_slope' => is_numeric($attributes['cvd_slope'] ?? null) ? (float) $attributes['cvd_slope'] : null,
             'volume_ratio' => $volume !== null && $volumeMa !== null && $volumeMa > 0.0
                 ? round($volume / $volumeMa, 4)
                 : null,
@@ -182,12 +186,17 @@ abstract class AbstractMarketModelService
      */
     protected function cacheSignals(Collection $signals, string $executionId): void
     {
+        $timestamp = now()->toIso8601String();
+
         Cache::put(
             sprintf('trading_models:%s:latest', $this->modelKey()),
             [
                 'execution_id' => $executionId,
+                'model' => $this->modelKey(),
+                'timestamp' => $timestamp,
+                'top_coins' => $signals->map(fn (ModelSignalDTO $signal): array => $signal->toContractArray())->all(),
                 'market_regime' => $this->resolveMarketRegime(),
-                'signals' => $signals->map(fn(ModelSignalDTO $signal): array => $signal->toArray())->all(),
+                'signals' => $signals->map(fn (ModelSignalDTO $signal): array => $signal->toArray())->all(),
             ],
             now()->addHour(),
         );

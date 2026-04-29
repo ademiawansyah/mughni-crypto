@@ -4,6 +4,7 @@ namespace App\Services\Market;
 
 use App\Models\MarketIndicator;
 use App\Models\MarketRaw;
+use App\Services\External\BinanceFuturesService;
 use App\Services\External\CoinGeckoService;
 use App\Services\Indicator\IndicatorService;
 use Carbon\Carbon;
@@ -31,6 +32,8 @@ class MarketDataService
 
     public function __construct(
         private readonly CoinGeckoService $coinGeckoService,
+        private readonly BinanceFuturesService $binanceFuturesService,
+        private readonly CoinUniverseService $coinUniverseService,
         private readonly IndicatorService $indicatorService,
     ) {}
 
@@ -90,11 +93,15 @@ class MarketDataService
 
         $this->storeRaw(
             coin: $coin,
+            endpoint: 'market_chart',
+            source: 'coingecko',
             timestamp: $timestamp,
             requestParams: $payload['request_params'],
             rawResponse: $payload['raw_response'],
             executionId: $executionId,
         );
+
+        $derivatives = $this->fetchDerivativesSnapshot($coin, $executionId);
 
         /** @var array<int, float> $prices */
         $prices = $payload['prices'];
@@ -115,7 +122,7 @@ class MarketDataService
         Log::info('[MarketDataService] MTF candle series prepared', [
             'execution_id' => $executionId,
             'coin' => $coin,
-            'counts' => array_map(static fn(array $series): int => count($series), $seriesByTimeframe),
+            'counts' => array_map(static fn (array $series): int => count($series), $seriesByTimeframe),
         ]);
 
         foreach ($seriesByTimeframe as $derivedTimeframe => $series) {
@@ -143,7 +150,7 @@ class MarketDataService
                 continue;
             }
 
-            $this->storeIndicator($coin, $derivedTimeframe, $timestamp, $indicators, $executionId);
+            $this->storeIndicator($coin, $derivedTimeframe, $timestamp, $indicators, $derivatives, $executionId);
         }
     }
 
@@ -232,7 +239,7 @@ class MarketDataService
     {
         $unique = array_values(array_unique($timeframes));
 
-        usort($unique, fn(string $a, string $b): int => $this->timeframeToMinutes($a) <=> $this->timeframeToMinutes($b));
+        usort($unique, fn (string $a, string $b): int => $this->timeframeToMinutes($a) <=> $this->timeframeToMinutes($b));
 
         return $unique;
     }
@@ -251,29 +258,36 @@ class MarketDataService
     }
 
     /**
-     * Persist the raw CoinGecko API response for one coin request.
+     * Persist one raw API payload for observability and replay.
      *
      * @param  array<string, mixed>  $requestParams
      * @param  array<string, mixed>  $rawResponse
      */
-    private function storeRaw(string $coin, Carbon $timestamp, array $requestParams, array $rawResponse, string $executionId): void
-    {
+    private function storeRaw(
+        string $coin,
+        string $endpoint,
+        string $source,
+        Carbon $timestamp,
+        array $requestParams,
+        array $rawResponse,
+        string $executionId,
+    ): void {
         $record = new MarketRaw;
         $record->execution_id = $executionId;
         $record->coin = $coin;
-        $record->endpoint = 'market_chart';
+        $record->endpoint = $endpoint;
         $record->timestamp = $timestamp;
         $record->request_params = $requestParams;
         $record->response_json = $rawResponse;
-        $record->source = 'coingecko';
+        $record->source = $source;
         $record->save();
 
         Log::info('[MarketDataService] Raw API response stored', [
             'execution_id' => $executionId,
             'coin' => $coin,
+            'endpoint' => $endpoint,
+            'source' => $source,
             'raw_id' => $record->id,
-            'request_params' => $requestParams,
-            'raw_response' => $rawResponse,
             'timestamp' => $timestamp->toIso8601String(),
         ]);
     }
@@ -282,8 +296,9 @@ class MarketDataService
      * Persist computed indicator data for a single timeframe.
      *
      * @param  array{price: float, rsi: float, ema9: float, ema21: float, trend: string}  $indicators
+     * @param  array{open_interest: float|null, funding_rate: float|null, cvd: float|null, cvd_slope: float|null}  $derivatives
      */
-    private function storeIndicator(string $coin, string $timeframe, Carbon $timestamp, array $indicators, string $executionId): void
+    private function storeIndicator(string $coin, string $timeframe, Carbon $timestamp, array $indicators, array $derivatives, string $executionId): void
     {
         $record = MarketIndicator::updateOrCreate(
             [
@@ -298,7 +313,11 @@ class MarketDataService
                 'ema9' => $indicators['ema9'],
                 'ema21' => $indicators['ema21'],
                 'trend' => $indicators['trend'],
-                'source' => 'coingecko',
+                'open_interest' => $derivatives['open_interest'],
+                'funding_rate' => $derivatives['funding_rate'],
+                'cvd' => $derivatives['cvd'],
+                'cvd_slope' => $derivatives['cvd_slope'],
+                'source' => 'coingecko+binance_futures',
             ]
         );
 
@@ -312,7 +331,114 @@ class MarketDataService
             'ema9' => $indicators['ema9'],
             'ema21' => $indicators['ema21'],
             'trend' => $indicators['trend'],
+            'open_interest' => $derivatives['open_interest'],
+            'funding_rate' => $derivatives['funding_rate'],
+            'cvd' => $derivatives['cvd'],
+            'cvd_slope' => $derivatives['cvd_slope'],
             'timestamp' => $timestamp->toIso8601String(),
         ]);
+    }
+
+    /**
+     * @return array{open_interest: float|null, funding_rate: float|null, cvd: float|null, cvd_slope: float|null}
+     */
+    private function fetchDerivativesSnapshot(string $coin, string $executionId): array
+    {
+        $symbol = $this->resolveBinanceSymbol($coin);
+
+        if ($symbol === null) {
+            Log::debug('[MarketDataService] Derivatives skipped: missing futures symbol', [
+                'execution_id' => $executionId,
+                'coin' => $coin,
+            ]);
+
+            return [
+                'open_interest' => null,
+                'funding_rate' => null,
+                'cvd' => null,
+                'cvd_slope' => null,
+            ];
+        }
+
+        $openInterestPayload = $this->binanceFuturesService->fetchOpenInterest($symbol);
+        $fundingPayload = $this->binanceFuturesService->fetchLatestFundingRate($symbol);
+        $aggTradesPayload = $this->binanceFuturesService->fetchAggTrades($symbol, 200);
+
+        if ($openInterestPayload !== null) {
+            $this->storeRaw(
+                coin: $coin,
+                endpoint: 'fapi_v1_openInterest',
+                source: 'binance_futures',
+                timestamp: now(),
+                requestParams: $openInterestPayload['request_params'],
+                rawResponse: $openInterestPayload['raw_response'],
+                executionId: $executionId,
+            );
+        }
+
+        if ($fundingPayload !== null) {
+            $this->storeRaw(
+                coin: $coin,
+                endpoint: 'fapi_v1_fundingRate',
+                source: 'binance_futures',
+                timestamp: now(),
+                requestParams: $fundingPayload['request_params'],
+                rawResponse: $fundingPayload['raw_response'],
+                executionId: $executionId,
+            );
+        }
+
+        if ($aggTradesPayload !== null) {
+            $this->storeRaw(
+                coin: $coin,
+                endpoint: 'fapi_v1_aggTrades',
+                source: 'binance_futures',
+                timestamp: now(),
+                requestParams: $aggTradesPayload['request_params'],
+                rawResponse: $aggTradesPayload['raw_response'],
+                executionId: $executionId,
+            );
+        }
+
+        $cvd = null;
+        $cvdSlope = null;
+
+        if ($aggTradesPayload !== null) {
+            $cvdMetrics = $this->binanceFuturesService->calculateCvdMetrics($aggTradesPayload['trades']);
+            $cvd = $cvdMetrics['cvd'];
+            $cvdSlope = $cvdMetrics['cvd_slope'];
+        }
+
+        return [
+            'open_interest' => $openInterestPayload['open_interest'] ?? null,
+            'funding_rate' => $fundingPayload['funding_rate'] ?? null,
+            'cvd' => $cvd,
+            'cvd_slope' => $cvdSlope,
+        ];
+    }
+
+    private function resolveBinanceSymbol(string $coin): ?string
+    {
+        $universe = $this->coinUniverseService->getCachedUniverse();
+
+        foreach ($universe as $entry) {
+            if (! is_array($entry)) {
+                continue;
+            }
+
+            if (($entry['coin'] ?? null) !== $coin) {
+                continue;
+            }
+
+            $symbol = strtoupper((string) ($entry['symbol'] ?? ''));
+
+            if ($symbol === '') {
+                return null;
+            }
+
+            return str_ends_with($symbol, 'USDT') ? $symbol : ($symbol.'USDT');
+        }
+
+        return null;
     }
 }

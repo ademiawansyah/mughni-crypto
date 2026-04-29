@@ -14,14 +14,14 @@ class PrePumpModelService extends AbstractMarketModelService
     public function evaluateCoin(string $coin, ?array $indicators = null): ?ModelSignalDTO
     {
         $resolvedIndicators = $indicators ?? $this->resolveIndicators($coin);
-        $setup = $resolvedIndicators['10m'] ?? null;
-        $macro = $resolvedIndicators['15m'] ?? null;
+        $setup = $resolvedIndicators['1h'] ?? null;
+        $macro = $resolvedIndicators['4h'] ?? $resolvedIndicators['1h'] ?? null;
 
         if ($setup === null || $macro === null) {
             return null;
         }
 
-        $bitcoinIndicator = $this->fetchLatestIndicator('bitcoin', '10m');
+        $bitcoinIndicator = $this->fetchLatestIndicator('bitcoin', '1h');
         $componentScores = $this->calculateComponentScores($resolvedIndicators, $bitcoinIndicator);
         $action = $this->determineAction($componentScores, $resolvedIndicators, $bitcoinIndicator);
 
@@ -45,7 +45,7 @@ class PrePumpModelService extends AbstractMarketModelService
             coin: $coin,
             action: $action,
             score: $score,
-            primaryTimeframe: '10m',
+            primaryTimeframe: '1h',
             componentScores: $componentScores,
             context: [
                 'market_regime' => $marketRegime['market_regime'] ?? 'RANGING',
@@ -73,12 +73,16 @@ class PrePumpModelService extends AbstractMarketModelService
      */
     public function calculateComponentScores(array $indicators, ?array $bitcoinIndicator = null): array
     {
-        $setup = $indicators['10m'] ?? [];
-        $macro = $indicators['15m'] ?? [];
+        $setup = $indicators['1h'] ?? [];
+        $macro = $indicators['4h'] ?? $indicators['1h'] ?? [];
         $setupTrend = (string) ($setup['trend'] ?? 'sideways');
         $setupRsi = is_numeric($setup['rsi'] ?? null) ? (float) $setup['rsi'] : 50.0;
         $volumeRatio = is_numeric($setup['volume_ratio'] ?? null) ? (float) $setup['volume_ratio'] : 0.0;
         $volatility = is_numeric($macro['volatility'] ?? null) ? (float) $macro['volatility'] : null;
+        $setupOpenInterest = is_numeric($setup['open_interest'] ?? null) ? (float) $setup['open_interest'] : null;
+        $macroOpenInterest = is_numeric($macro['open_interest'] ?? null) ? (float) $macro['open_interest'] : null;
+        $fundingRate = is_numeric($setup['funding_rate'] ?? null) ? (float) $setup['funding_rate'] : null;
+        $cvdSlope = is_numeric($setup['cvd_slope'] ?? null) ? (float) $setup['cvd_slope'] : null;
         $bitcoinTrend = (string) ($bitcoinIndicator['trend'] ?? 'sideways');
         $bitcoinRsi = is_numeric($bitcoinIndicator['rsi'] ?? null) ? (float) $bitcoinIndicator['rsi'] : 50.0;
 
@@ -102,12 +106,36 @@ class PrePumpModelService extends AbstractMarketModelService
             $relativeStrength = 0.7;
         }
 
+        $fundingScore = 0.0;
+        if ($fundingRate !== null) {
+            if ($fundingRate <= -0.0005) {
+                $fundingScore = 1.0;
+            } elseif ($fundingRate <= -0.0002) {
+                $fundingScore = 0.6;
+            } elseif ($fundingRate < 0.0) {
+                $fundingScore = 0.3;
+            }
+        }
+
+        $oiScore = 0.0;
+        if ($setupOpenInterest !== null && $macroOpenInterest !== null && $macroOpenInterest > 0.0) {
+            $oiExpansion = ($setupOpenInterest - $macroOpenInterest) / $macroOpenInterest;
+            $oiScore = $oiExpansion >= 0.05 ? 1.0 : ($oiExpansion >= 0.02 ? 0.7 : 0.2);
+        } elseif ($volumeRatio >= 1.5) {
+            $oiScore = 0.5;
+        }
+
+        $cvdScore = 0.0;
+        if ($cvdSlope !== null) {
+            $cvdScore = $cvdSlope > 0.0 ? 1.0 : 0.1;
+        }
+
         return [
-            'funding' => 0.5,
+            'funding' => $fundingScore,
             'atr_compression' => $atrCompression,
-            'oi' => $volumeRatio >= 1.5 ? 1.0 : ($volumeRatio >= 1.2 ? 0.6 : 0.0),
+            'oi' => $oiScore,
             'rs' => $relativeStrength,
-            'cvd' => 0.5,
+            'cvd' => $cvdScore,
         ];
     }
 
@@ -120,7 +148,7 @@ class PrePumpModelService extends AbstractMarketModelService
      */
     public function determineAction(array $componentScores, array $indicators, ?array $bitcoinIndicator = null): string
     {
-        $setupTrend = (string) ($indicators['10m']['trend'] ?? 'sideways');
+        $setupTrend = (string) ($indicators['1h']['trend'] ?? 'sideways');
 
         if (
             ($componentScores['atr_compression'] ?? 0.0) >= 0.7
@@ -148,7 +176,7 @@ class PrePumpModelService extends AbstractMarketModelService
     public function rankTopCoins(Collection $signals): Collection
     {
         return $signals
-            ->sortByDesc(fn(ModelSignalDTO $signal): int => $signal->score)
+            ->sortByDesc(fn (ModelSignalDTO $signal): int => $signal->score)
             ->take(10)
             ->values();
     }
@@ -158,7 +186,7 @@ class PrePumpModelService extends AbstractMarketModelService
      */
     protected function requiredTimeframes(): array
     {
-        return ['5m', '10m', '15m'];
+        return ['15m', '1h', '4h'];
     }
 
     protected function modelKey(): string

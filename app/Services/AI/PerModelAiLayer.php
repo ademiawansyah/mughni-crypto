@@ -266,9 +266,10 @@ Consider:
 
 Respond with ONLY valid JSON:
 {
-  "action": "{$signal->action}",
-  "confidence": 0-100,
-  "reason": "brief reasoning"
+    "action": "{$signal->action}",
+    "confidence": 0-100,
+    "risk_level": "LOW|MEDIUM|HIGH",
+    "reason": "brief reasoning"
 }
 EOT;
 
@@ -304,7 +305,7 @@ MARKET CONTEXT:
 
 SQUEEZE SETUP COMPONENTS:
 - Funding Extreme: {$this->scorePercent($scores['funding'] ?? 0)}%
-- ATR Compression: {$this->scorePercent($scores['atr'] ?? 0)}%
+- ATR Compression: {$this->scorePercent($scores['atr_compression'] ?? 0)}%
 - OI Expansion: {$this->scorePercent($scores['oi'] ?? 0)}%
 - Relative Strength: {$this->scorePercent($scores['rs'] ?? 0)}%
 - CVD Momentum: {$this->scorePercent($scores['cvd'] ?? 0)}%
@@ -320,9 +321,10 @@ Consider:
 
 Respond with ONLY valid JSON:
 {
-  "action": "{$signal->action}",
-  "confidence": 0-100,
-  "reason": "brief reasoning"
+    "action": "{$signal->action}",
+    "confidence": 0-100,
+    "risk_level": "LOW|MEDIUM|HIGH",
+    "reason": "brief reasoning"
 }
 EOT;
 
@@ -375,9 +377,10 @@ Consider:
 
 Respond with ONLY valid JSON:
 {
-  "action": "{$signal->action}",
-  "confidence": 0-100,
-  "reason": "brief reasoning"
+    "action": "{$signal->action}",
+    "confidence": 0-100,
+    "risk_level": "LOW|MEDIUM|HIGH",
+    "reason": "brief reasoning"
 }
 EOT;
 

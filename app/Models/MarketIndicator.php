@@ -26,6 +26,10 @@ class MarketIndicator extends Model
         'volume',
         'volume_ma',
         'volatility',
+        'open_interest',
+        'funding_rate',
+        'cvd',
+        'cvd_slope',
         'price_change_24h',
     ];
 
@@ -38,6 +42,10 @@ class MarketIndicator extends Model
             'price' => 'decimal:8',
             'volume' => 'decimal:8',
             'volume_ma' => 'decimal:8',
+            'open_interest' => 'decimal:8',
+            'funding_rate' => 'decimal:10',
+            'cvd' => 'decimal:8',
+            'cvd_slope' => 'decimal:8',
         ];
     }
 

@@ -29,6 +29,9 @@ class ModelSignalDTO
     {
         return [
             'model' => $this->model,
+            'symbol' => $this->coin,
+            'total_score' => $this->score,
+            'components' => $this->componentScores,
             'coin' => $this->coin,
             'action' => $this->action,
             'score' => $this->score,
@@ -36,6 +39,24 @@ class ModelSignalDTO
             'component_scores' => $this->componentScores,
             'context' => $this->context,
             'reasons' => $this->reasons,
+        ];
+    }
+
+    /**
+     * Convert to the canonical system-spec output shape.
+     *
+     * @return array{symbol: string, total_score: int, components: array<string, float>, action: string, primary_timeframe: string, reasons: array<int, string>, context: array<string, mixed>}
+     */
+    public function toContractArray(): array
+    {
+        return [
+            'symbol' => $this->coin,
+            'total_score' => $this->score,
+            'components' => $this->componentScores,
+            'action' => $this->action,
+            'primary_timeframe' => $this->primaryTimeframe,
+            'reasons' => $this->reasons,
+            'context' => $this->context,
         ];
     }
 }

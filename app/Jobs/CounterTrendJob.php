@@ -72,6 +72,20 @@ class CounterTrendJob implements ShouldQueue
                 'signal_count' => $signals->count(),
             ]);
 
+            if ($signals->isEmpty()) {
+                $persistenceService->persistNoSignalDecision(
+                    model: 'counter_trend',
+                    marketRegime: $marketRegime,
+                    executionId: $executionId,
+                    timeframe: '15m',
+                );
+
+                Log::info('[CounterTrendJob] Persisted fallback HOLD decision', [
+                    'execution_id' => $executionId,
+                    'reason' => 'no_candidates_passed',
+                ]);
+            }
+
             // Process each signal through AI layer + persistence + notification
             $signals->each(function ($signal) use (
                 $executionId,
@@ -109,7 +123,7 @@ class CounterTrendJob implements ShouldQueue
                 }
 
                 // Send notification if action is BUY/SELL and confidence meets threshold
-                $notificationThreshold = (int) config('notifications.counter_trend.confidence_threshold', 70);
+                $notificationThreshold = (int) config('models.notifications.counter_trend.confidence_threshold', 70);
 
                 if (
                     in_array($aiDecision['action'], ['BUY', 'SELL'], true)

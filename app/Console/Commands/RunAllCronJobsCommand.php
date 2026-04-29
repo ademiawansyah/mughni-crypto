@@ -48,27 +48,27 @@ class RunAllCronJobsCommand extends Command
 
             // 4. Dispatch CounterTrendJob (if enabled)
             if (GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('counter_trend')) {
-                $this->info('▶ Dispatching CounterTrendJob...');
-                CounterTrendJob::dispatchSync();
-                $this->line('  ✓ CounterTrendJob completed');
+                $this->info('▶ Queueing CounterTrendJob...');
+                CounterTrendJob::dispatch();
+                $this->line('  ✓ CounterTrendJob queued');
             } else {
                 $this->line('  ⊘ CounterTrendJob skipped (not enabled)');
             }
 
             // 5. Dispatch PrePumpJob (if enabled)
             if (GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('pre_pump')) {
-                $this->info('▶ Dispatching PrePumpJob...');
-                PrePumpJob::dispatchSync();
-                $this->line('  ✓ PrePumpJob completed');
+                $this->info('▶ Queueing PrePumpJob...');
+                PrePumpJob::dispatch();
+                $this->line('  ✓ PrePumpJob queued');
             } else {
                 $this->line('  ⊘ PrePumpJob skipped (not enabled)');
             }
 
             // 6. Dispatch MomentumJob (if enabled)
             if (GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('momentum')) {
-                $this->info('▶ Dispatching MomentumJob...');
-                MomentumJob::dispatchSync();
-                $this->line('  ✓ MomentumJob completed');
+                $this->info('▶ Queueing MomentumJob...');
+                MomentumJob::dispatch();
+                $this->line('  ✓ MomentumJob queued');
             } else {
                 $this->line('  ⊘ MomentumJob skipped (not enabled)');
             }

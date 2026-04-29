@@ -41,8 +41,21 @@ class PerModelNotificationService
         try {
             $message = $this->buildMessage($model, $signal, $aiDecision, $marketRegime, $executionId);
 
-            Telegram::sendMessage([
-                'chat_id' => config('telegram.chat_id'),
+            $chatId = (string) config('services.telegram.chat_id', '');
+            $botName = (string) config('services.telegram.bot', 'mybot');
+
+            if ($chatId === '') {
+                Log::warning('[PerModelNotificationService] Telegram chat ID is not configured, skipping send', [
+                    'execution_id' => $executionId,
+                    'model' => $model,
+                    'coin' => $signal->coin,
+                ]);
+
+                return;
+            }
+
+            Telegram::bot($botName)->sendMessage([
+                'chat_id' => $chatId,
                 'text' => $message,
                 'parse_mode' => 'HTML',
             ]);
