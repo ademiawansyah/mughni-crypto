@@ -57,7 +57,7 @@ class ModelExecutionHistoryWidget extends TableWidget
     protected function executionHistoryQuery(): Builder
     {
         return AiDecision::query()
-            ->selectRaw('execution_id, model, COUNT(*) as signals_count, MAX(confidence) as top_confidence, MAX(timestamp) as executed_at')
+            ->selectRaw('MIN(id) as id, execution_id, model, COUNT(*) as signals_count, MAX(confidence) as top_confidence, MAX(timestamp) as executed_at')
             ->whereNotNull('execution_id')
             ->whereNotNull('model')
             ->groupBy('execution_id', 'model');
