@@ -1,94 +1,139 @@
-# CRYPTO TRADING SYSTEM
-## Technical Specification and Developer Blueprint
+# CRYPTO TRADING SYSTEM — System Requirements & Developer Blueprint
 
-Version: 2.0
-Year: 2026
-Audience: Developers and AI Coding Agents
+**Version:** 2.0  
+**Year:** 2026  
+**Audience:** Developers and AI Coding Agents  
+**Status:** SOURCE OF TRUTH
 
 ---
 
-## 0. System Overview
+## Table of Contents
 
-This document is the **source of truth** and technical blueprint for building an automated crypto signal system on a Linux VPS. It defines **4 independent trading models** that MUST NOT be merged with each other. Each model has its own logic, data sources, timeframes, and entry/exit conditions.
+1. [System Overview](#1-system-overview)
+2. [Purpose & Non-Negotiable Rules](#2-purpose--non-negotiable-rules)
+3. [High-Level Architecture](#3-high-level-architecture)
+4. [Model 1: Counter Trend](#4-model-1-counter-trend)
+5. [Model 2: Pre-Pump Detector](#5-model-2-pre-pump-detector)
+6. [Model 3: Trend Momentum](#6-model-3-trend-momentum)
+7. [Model 4: Spot Momentum Gainers](#7-model-4-spot-momentum-gainers)
+8. [Data Sources & API Endpoints](#8-data-sources--api-endpoints)
+9. [Filter Pipeline Architecture](#9-filter-pipeline-architecture)
+10. [Caching & Rate Limiting Policy](#10-caching--rate-limiting-policy)
+11. [Implementation Guidance](#11-implementation-guidance)
+12. [Agent Change Protocol](#12-agent-change-protocol)
+13. [Developer Checklist](#13-developer-checklist)
 
-| Property | Detail |
+---
+
+## 1. System Overview
+
+This document defines a **crypto signal generation system** with **4 independent trading models** that MUST NOT be merged. Each model operates as a separate service with its own logic, data sources, timeframes, and entry/exit conditions.
+
+| Property | Specification |
 |---|---|
-| Models | 4 (independent, not integrated) |
-| Data Sources | Public APIs only — CoinGecko, Binance, Coinalyze, CoinMarketCap |
-| Implementation Language | Flexible (Python or Node.js recommended) |
-| Deployment Target | Linux VPS |
-| Output | Top 10 coins per model with total score and component-level details |
+| **Models** | 4 independent, isolated services |
+| **Data Sources** | Public APIs only (CoinGecko, Binance, Coinalyze, CoinMarketCap) |
+| **Implementation** | Flexible (Python 3.9+ or Node.js 18+ recommended) |
+| **Deployment** | Linux VPS (Ubuntu 20.04+ or Debian 11+) |
+| **Output** | Top 10 coins per model with total score + component breakdown |
+| **Execution** | Each model as separate process/service |
 
-**Critical Rules:**
-- All four models MUST run as separate services or processes.
-- Each model produces its own ranked list — never a merged list.
-- Derivatives data (OI, Funding, CVD) is confirmation only — NOT the primary trigger.
-- All data used must be publicly accessible — no paid authentication required.
-- Model 4 is SPOT trading only — no short positions, no leverage.
+### Critical Constraints
 
----
-
-## 1. Purpose
-
-This system generates ranked trade signals. It does NOT execute trades. Trade execution must remain manual or be handled by a separate risk-managed execution layer.
+- **Model Independence:** All four models MUST run as independent services. Never merge outputs into a single ranked list.
+- **Public Data Only:** All data must be from public APIs with no paid authentication required.
+- **Derivatives as Confirmation:** Open Interest, Funding Rates, and CVD are confirmation signals only — never primary triggers.
+- **Model 4 SPOT ONLY:** No short positions, no leverage, long entry only.
 
 ---
 
-## 2. Non-Negotiable Rules
+## 2. Purpose & Non-Negotiable Rules
 
-- Keep all four models fully independent.
-- Never merge model outputs into one shared signal list.
-- Use public market data only.
-- Run each model as a separate service or process.
-- Treat derivatives data as confirmation, not the primary trigger.
-- Output Top 10 coins per model, with component-level scoring details.
-- Model 4 is long-only spot — no short exposure, no leverage.
+### 2.1 Purpose
+
+This system generates ranked trade signals. It does NOT execute trades, manage positions, or access exchange accounts.
+
+**Trade execution must remain manual or be handled by a separate risk-managed execution layer.**
+
+### 2.2 Non-Negotiable Rules
+
+1. Keep all four models fully independent.
+2. Never merge model outputs into one shared signal list.
+3. Use public market data only.
+4. Run each model as a separate service or process.
+5. Treat derivatives data as confirmation, not the primary trigger.
+6. Output Top 10 coins per model with component-level scoring details.
+7. Model 4 is long-only spot — no short exposure, no leverage.
+8. All API calls are centralized in a shared data-fetcher service.
+9. Model services consume cached data only — no direct external API calls.
+
+
 
 ---
 
 ## 3. High-Level Architecture
 
-### 3.1 Services
+### 3.1 Service Stack
 
-| Service | Schedule | Output |
-|---|---|---|
-| service-data-fetcher | Every 5 minutes | Shared OHLCV and derivatives cache |
-| service-counter-trend (Model 1) | Every 15 minutes | Top 10 Counter Trend signals |
-| service-pre-pump (Model 2) | Every 4 hours | Top 10 Pre-Pump signals |
-| service-trend-momentum (Model 3) | Every 4 hours | Top 10 Trend Momentum signals |
-| service-spot-gainers (Model 4) | Daily at 07:00 WIB (UTC+7) | Top 10 Spot Momentum signals |
-| notifier | On demand (called by each model) | Alerts via Telegram or Discord |
+| Service | Role | Schedule | Output |
+|---|---|---|---|
+| **service-data-fetcher** | Centralized market data fetcher | Every 5 minutes | Cached OHLCV + derivatives for all models |
+| **service-counter-trend** | Model 1 scanner | Every 15 minutes | Top 10 Counter Trend signals (JSON) |
+| **service-pre-pump** | Model 2 scanner | Every 4 hours | Top 10 Pre-Pump signals (JSON) |
+| **service-trend-momentum** | Model 3 scanner | Every 4 hours | Top 10 Trend Momentum signals (JSON) |
+| **service-spot-gainers** | Model 4 scanner | Daily at 07:00 WIB (UTC+7) | Top 10 Spot Momentum signals (JSON) |
+| **notifier** | Alert dispatcher | On-demand (called by each model) | Telegram / Discord notifications |
 
-### 3.2 Required Execution Pattern
-- Use one centralized data-fetcher for all shared data.
-- Store and reuse cached data via Redis and/or database storage.
-- Model services consume cached data only.
-- Model services MUST NOT call external APIs directly.
+### 3.2 Execution Pattern (MANDATORY)
 
-### 3.3 Standard Output Contract
+```
+┌─────────────────────┐
+│  shared-data-fetch  │ (runs every 5 min)
+│  - fetch 300 coins  │
+│  - cache 5 min      │
+│  - apply pre-filter │
+└──────────┬──────────┘
+           │ (cache → Redis/DB)
+     ┌─────┼─────┬─────────┐
+     ▼     ▼     ▼         ▼
+  Model1 Model2 Model3   Model4
+  (15m)  (4h)   (4h)    (daily 7:00)
+  │      │      │         │
+  └──────┴──────┴─────────┘
+     (read cache only)
+```
 
-Each model returns JSON with this structure:
+### 3.3 Standard Output Contract (JSON)
+
+All models return JSON with this identical structure:
 
 ```json
 {
-  "model": "model1_counter_trend",
+  "model": "model_name",
+  "version": "2.0",
   "timestamp": "2026-05-04T07:00:00+07:00",
+  "execution_date": "2026-05-04",
   "results": [
     {
       "rank": 1,
       "symbol": "BNBUSDT",
+      "price": 625.43,
       "total_score": 87.5,
       "components": {
-        "liquidity_sweep": true,
-        "mss_confirmed": true,
-        "fvg_ob_entry": 0.75,
-        "oi_declining": 0.85,
-        "funding_extreme": 0.70
+        "component_1": 0.85,
+        "component_2": true,
+        "component_3": 0.90
+      },
+      "metadata": {
+        "entry_point": "entry_value",
+        "stop_loss": "sl_value",
+        "entry_timeframe": "1H"
       }
     }
   ]
 }
 ```
+
 
 ---
 
@@ -96,19 +141,20 @@ Each model returns JSON with this structure:
 
 **Strategy:** Mia Style — Liquidity Sweep + Market Structure Shift + Exhaustion Reversal Detection
 
-### 4.1 Description and Philosophy
+### 4.1 Description & Philosophy
 
-This model detects price reversal points where price manipulation meets market exhaustion. The goal is not to chase aggression but to find the exact moment when one side's pressure reaches its maximum and begins to reverse.
+This model detects price reversals when price manipulation meets market exhaustion. The goal is not to chase aggression but to find the exact moment when one side's pressure reaches maximum and begins to reverse.
 
-**Core philosophy:** Smart money sweeps liquidity (retail stop-losses) before reversing. The system detects the moment after that sweep occurs.
+**Core Philosophy:** Smart money sweeps liquidity (retail stop-losses) before reversing direction. This system detects the moment after that sweep completes.
 
 ### 4.2 Coin Universe
 
-| Parameter | Value |
+| Parameter | Specification |
 |---|---|
-| Target Coins | Volatile altcoins (market cap rank 50–300) |
-| Minimum Filter | 24H volume > $5 million, exclude stablecoins |
-| Source | CoinGecko `/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=300` |
+| **Target Coins** | Volatile altcoins (market cap rank 50–300) |
+| **Minimum Volume** | 24H volume > $5,000,000 |
+| **Exclusions** | Stablecoins only |
+| **Data Source** | CoinGecko `/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=300` |
 
 ### 4.3 Timeframes
 
@@ -118,7 +164,7 @@ This model detects price reversal points where price manipulation meets market e
 | Entry Confirmation | 15M |
 | Macro Context Filter | 1D (optional) |
 
-### 4.4 Signal Components and Logic
+### 4.4 Signal Components & Logic
 
 #### A. Price Action — Mia Style (Primary Trigger)
 
@@ -126,29 +172,29 @@ These three conditions MUST be fulfilled in sequence:
 
 | Component | Description | Detection Method | Data Source |
 |---|---|---|---|
-| Liquidity Sweep | Price breaks an Old High/Low or Equal H/L then reverses | Wick breaks level, candle body closes back inside range | OHLCV via CoinGecko `/coins/{id}/ohlc` or Binance `/api/v3/klines` |
-| MSS (Market Structure Shift) | Sudden trend character change with a body break | Candle CLOSE crosses a swing point in the opposite direction | Calculate swing highs/lows from OHLCV (pandas-ta / ta-lib) |
-| FVG / OB Entry | Price retraces into an imbalance zone after MSS | Fair Value Gap: gap across 3 candles. Order Block: last candle before impulse move | Local calculation from OHLCV data |
+| **Liquidity Sweep** | Price breaks Old High/Low or Equal H/L, then reverses | Wick breaks level, candle body closes back inside range | OHLCV via CoinGecko `/coins/{id}/ohlc` or Binance `/api/v3/klines` |
+| **MSS (Market Structure Shift)** | Sudden trend character change with body break | Candle CLOSE crosses swing point in opposite direction | Calculate swing highs/lows from OHLCV (pandas-ta / ta-lib) |
+| **FVG / OB Entry** | Price retraces into imbalance zone after MSS | Fair Value Gap: gap across 3 candles. Order Block: last candle before impulse move | Local calculation from OHLCV |
 
 #### B. Derivatives — Confirmation (Applied After Primary Trigger)
 
 | Component | Description | Detection Method | Data Source |
 |---|---|---|---|
-| Open Interest | OI declines when price sweeps (exhaustion signal) | OI drops >5% concurrent with price spike | Coinalyze `/futures/open-interest` or Bybit `/v5/market/open-interest` |
-| Funding Rate | Extreme funding = potential reversal | Funding < -0.1% or > +0.1% (calibratable threshold) | Coinalyze `/futures/funding-rate` |
-| CVD (Cumulative Volume Delta) | CVD divergence with price = exhaustion confirmation | Price makes new high but CVD declines (bearish divergence) | Calculated from trade data: Binance `/api/v3/trades` (buy vs sell side) |
+| **Open Interest** | OI declines when price sweeps (exhaustion signal) | OI drops >5% concurrent with price spike | Coinalyze `/futures/open-interest` or Bybit `/v5/market/open-interest` |
+| **Funding Rate** | Extreme funding = potential reversal | Funding < -0.1% or > +0.1% (calibratable) | Coinalyze `/futures/funding-rate` |
+| **CVD (Cumulative Volume Delta)** | CVD divergence with price = exhaustion confirmation | Price makes new high but CVD declines (bearish divergence) | Calculated from Binance `/api/v3/trades` (buy vs sell side) |
 
 ### 4.5 Scoring Weights
 
-| Signal | Weight | Notes |
+| Signal | Weight | Gate Status |
 |---|---|---|
-| Liquidity sweep confirmed | 40% | **Required** — skip coin if absent |
+| Liquidity sweep confirmed | 40% | **Required** — skip if absent |
 | MSS formed | 30% | **Required** |
-| FVG/OB as entry zone | 15% | Optional but raises score |
-| OI declining during sweep | 8% | Derivatives confirmation |
-| Extreme funding rate | 7% | Derivatives confirmation |
+| FVG/OB as entry zone | 15% | Optional, raises score |
+| OI declining during sweep | 8% | Confirmation |
+| Extreme funding rate | 7% | Confirmation |
 
-> All scores normalized to 0–100. Include component scores in output for transparency.
+> **Score Normalization:** All scores 0–100. Include component scores in output for transparency.
 
 ---
 
@@ -156,53 +202,54 @@ These three conditions MUST be fulfilled in sequence:
 
 **Strategy:** Pressure Cooker + Momentum Runner — Short Squeeze Expansion Setup
 
-### 5.1 Description and Philosophy
+### 5.1 Description & Philosophy
 
-This model detects coins in a compression phase before a major breakout. Persistent short pressure (negative funding), drying volume, and low volatility create a "pressure cooker" condition — when it explodes, the move is significant.
+This model detects coins in a compression phase before major breakout. Persistent short pressure (negative funding), drying volume, and low volatility create a "pressure cooker" — when it explodes, the move is significant.
 
 ### 5.2 Coin Universe
 
-| Parameter | Value |
+| Parameter | Specification |
 |---|---|
-| Target Coins | Mid-cap (market cap rank 20–150) |
-| Minimum Filter | 24H volume > $10 million, futures market available (OI accessible) |
-| Source | CoinGecko `/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=150` |
+| **Target Coins** | Mid-cap (market cap rank 20–150) |
+| **Minimum Volume** | 24H volume > $10,000,000 |
+| **Requirement** | Futures market available (OI accessible) |
+| **Data Source** | CoinGecko `/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=150` |
 
 ### 5.3 Timeframes
 
 | Component | Timeframe |
 |---|---|
 | Funding Rate Screening | Real-time / 8H intervals |
-| OI and Volume Screening | 4H |
+| OI & Volume Screening | 4H |
 | Entry Confirmation | 1H |
 
-### 5.4 Signal Components and Logic
+### 5.4 Signal Components & Logic
 
 #### A. Funding Rate Squeeze
 
 | Component | Description | Detection Method | Data Source |
 |---|---|---|---|
-| Persistent Negative Funding | Short sellers dominate — potential short squeeze | Funding < -0.05% per 8H for 3 consecutive periods | Coinalyze `/futures/funding-rate` |
-| OI Rising + Price Sideways | Positions building while price does not rise = time bomb | OI rises >10% in 24H, price in range <3% | Coinalyze `/futures/open-interest` |
-| Low ATR | Volatility compressing = before an explosion | ATR 14-period below 30-day average | Calculated from OHLCV (ta-lib) |
+| **Persistent Negative Funding** | Short sellers dominate — potential squeeze | Funding < -0.05% per 8H for 3 consecutive periods | Coinalyze `/futures/funding-rate` |
+| **OI Rising + Price Sideways** | Positions building while price flat = time bomb | OI rises >10% in 24H, price in range <3% | Coinalyze `/futures/open-interest` |
+| **Low ATR** | Volatility compressing = before explosion | ATR 14-period below 30-day average | Calculated from OHLCV (ta-lib) |
 
 #### B. Momentum Runner
 
 | Component | Description | Detection Method | Data Source |
 |---|---|---|---|
-| Drying Volume | Volume drops drastically = silent accumulation | 24H volume drops >50% from 7-day average | CoinGecko `/coins/{id}/market_chart` |
-| CVD Divergence | CVD quietly rising while volume drops = accumulation | CVD trending up in last 24H while price flat | Binance public trade data |
-| RSI Compression | RSI trapped in neutral zone = ready for breakout | RSI 14 between 45–55 for >5 candles on 4H | Calculated from OHLCV (pandas-ta) |
+| **Drying Volume** | Volume drops drastically = silent accumulation | 24H volume drops >50% from 7-day average | CoinGecko `/coins/{id}/market_chart` |
+| **CVD Divergence** | CVD rising quietly while volume drops = accumulation | CVD trending up in 24H while price flat | Binance public trade data |
+| **RSI Compression** | RSI trapped in neutral zone = ready for breakout | RSI 14 between 45–55 for >5 candles on 4H | Calculated from OHLCV (pandas-ta) |
 
 ### 5.5 Scoring Weights
 
-| Signal | Weight | Notes |
+| Signal | Weight | Gate Status |
 |---|---|---|
 | Persistent negative funding rate | 35% | Primary trigger |
 | OI rising + price sideways | 25% | Accumulation confirmation |
 | Low ATR (volatility compression) | 20% | Lower = better |
-| CVD quietly rising | 12% | Hidden accumulation signal |
-| RSI compression | 8% | Technical confirmation |
+| CVD quietly rising | 12% | Hidden accumulation |
+| RSI compression (45–55) | 8% | Technical confirmation |
 
 ---
 
@@ -210,17 +257,18 @@ This model detects coins in a compression phase before a major breakout. Persist
 
 **Strategy:** MACD-RSI-EMA Confirmation System — Follow Confirmed Breakout Continuation
 
-### 6.1 Description and Philosophy
+### 6.1 Description & Philosophy
 
-This model detects coins already in a strong trend that still have room to continue. It does not catch bottoms — it follows proven momentum. Entry is only taken after trend structure is confirmed, not on speculation.
+This model detects coins already in a strong trend with room to continue. It does not catch bottoms — it follows proven momentum. Entry is only after trend structure confirmation, not speculation.
 
 ### 6.2 Coin Universe
 
-| Parameter | Value |
+| Parameter | Specification |
 |---|---|
-| Target Coins | Large-cap (market cap rank 1–50); BTC and ETH always included |
-| Minimum Filter | 24H volume > $50 million, listed for at least 6 months |
-| Source | CoinGecko `/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50` |
+| **Target Coins** | Large-cap (market cap rank 1–50); BTC and ETH always included |
+| **Minimum Volume** | 24H volume > $50,000,000 |
+| **Requirement** | Listed for at least 6 months |
+| **Data Source** | CoinGecko `/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50` |
 
 ### 6.3 Timeframes
 
@@ -230,39 +278,39 @@ This model detects coins already in a strong trend that still have room to conti
 | Entry Signal (MACD + RSI) | 4H |
 | BOS Confirmation | 1D or 4H |
 
-### 6.4 Signal Components and Logic
+### 6.4 Signal Components & Logic
 
 #### A. EMA Filter (Trend Direction Gate)
 
 | Component | Description | Detection Method | Data Source |
 |---|---|---|---|
-| EMA 50 & 200 | Price above both EMAs = bullish trend | Close > EMA50 > EMA200, EMA spread widening | Calculated from daily OHLCV (ta-lib / pandas-ta) |
-| EMA Slope | EMA rising = healthy trend | EMA50 slope positive for at least 3 consecutive days | Calculate delta EMA per period |
+| **EMA 50 & 200** | Price above both EMAs = bullish trend | Close > EMA50 > EMA200, EMA spread widening | Calculated from daily OHLCV (ta-lib / pandas-ta) |
+| **EMA Slope** | EMA rising = healthy trend | EMA50 slope positive for ≥3 consecutive days | Calculate delta EMA per period |
 
-#### B. RSI and MACD Synergy
+#### B. RSI & MACD Synergy
 
 | Component | Description | Detection Method | Data Source |
 |---|---|---|---|
-| RSI Momentum Zone | RSI 50–65 = strong momentum without overbought | RSI 14 in range 50–65 on 4H | pandas-ta / ta-lib from OHLCV |
-| MACD Confirmation | MACD line above signal, both above 0 | MACD > Signal > 0, histogram positive and expanding | Calculate MACD (12,26,9) from close price |
-| BOS (Break of Structure) | Coin continues making higher highs = valid trend structure | 4H close breaks prior swing high | Detect swing highs from local OHLCV |
+| **RSI Momentum Zone** | RSI 50–65 = strong momentum without overbought | RSI 14 in range 50–65 on 4H | pandas-ta / ta-lib from OHLCV |
+| **MACD Confirmation** | MACD line above signal, both above 0 | MACD > Signal > 0, histogram positive and expanding | Calculate MACD (12,26,9) from close price |
+| **BOS (Break of Structure)** | Coin continues making higher highs = valid structure | 4H close breaks prior swing high | Detect swing highs from local OHLCV |
 
 #### C. Derivatives — Trend Health Confirmation
 
 | Component | Description | Detection Method | Data Source |
 |---|---|---|---|
-| OI Rising + Price Rising | New money entering = healthy trend | OI and price both rise >5% in 24H | Coinalyze `/futures/open-interest` |
-| Positive CVD | Buyer aggression dominates | CVD trending positive over last 24H | Binance trade data |
+| **OI Rising + Price Rising** | New money entering = healthy trend | OI and price both rise >5% in 24H | Coinalyze `/futures/open-interest` |
+| **Positive CVD** | Buyer aggression dominates | CVD trending positive over last 24H | Binance trade data |
 
 ### 6.5 Scoring Weights
 
-| Signal | Weight | Notes |
+| Signal | Weight | Gate Status |
 |---|---|---|
-| EMA filter satisfied (price > EMA50 > EMA200) | 30% | **Gate** — skip coin if not satisfied |
+| EMA filter satisfied (price > EMA50 > EMA200) | 30% | **Gate** — skip if not satisfied |
 | MACD in positive zone | 25% | Momentum confirmation |
 | RSI in zone 50–65 | 20% | Quality filter |
 | BOS confirmed | 15% | Valid trend structure |
-| OI + CVD positive | 10% | Derivatives confirmation |
+| OI + CVD positive | 10% | Confirmation |
 
 ---
 
@@ -270,22 +318,23 @@ This model detects coins already in a strong trend that still have room to conti
 
 **Strategy:** CMC Top Gainers + Bullish Candle + Volume Screening
 
-> **This model is SPOT ONLY. No short positions. No leverage.**
+> **SPOT ONLY:** No short positions. No leverage.
 
-### 7.1 Description and Philosophy
+### 7.1 Description & Philosophy
 
-This model is a pure spot trading strategy exploiting short-term momentum. The logic is straightforward: coins that enter the top 24H gainers list with a strong confirmed bullish candle and high volume are likely in momentum that can continue for several days.
+Pure spot trading strategy exploiting short-term momentum. Coins entering top 24H gainers with strong bullish candle + high volume are likely in momentum that continues for several days.
 
-**Core philosophy:** Follow momentum that is proven today. Enter with measured risk, exit with discipline when momentum reverses or target is reached.
+**Core Philosophy:** Follow momentum proven today. Enter with measured risk, exit with discipline when momentum reverses or target reached.
 
 ### 7.2 Coin Universe
 
-| Parameter | Value |
+| Parameter | Specification |
 |---|---|
-| Target Coins | Top 200 by market cap |
-| Minimum Filter | Market cap > $100 million, exclude stablecoins and wrapped tokens |
-| Source | CoinMarketCap `/v1/cryptocurrency/listings/latest?limit=200&sort=market_cap` |
-| Selection | Sorted by 24H percentage change descending — take top 10 |
+| **Target Coins** | Top 200 by market cap, sorted by 24H% gain descending |
+| **Selection** | Top 10 highest 24H percentage gain |
+| **Market Cap Minimum** | > $100,000,000 |
+| **Exclusions** | Stablecoins (USDT, USDC, DAI, etc.), wrapped tokens (WBTC, WETH, etc.) |
+| **Data Source** | CoinMarketCap `/v1/cryptocurrency/listings/latest?limit=200&sort=market_cap` |
 
 ### 7.3 Timeframes
 
@@ -299,247 +348,477 @@ This model is a pure spot trading strategy exploiting short-term momentum. The l
 
 #### Step 01 — Fetch Top Gainers
 
-| Component | Description | Detection Method | Data Source |
-|---|---|---|---|
-| Fetch data | Top 200 market cap coins sorted by 24H% descending | Take 10 coins with highest 24H% | CoinMarketCap `/v1/cryptocurrency/listings/latest` or CoinGecko `/coins/markets?order=percent_change_24h_desc` |
+| Component | Description |
+|---|---|
+| **Operation** | Fetch top 200 market cap coins, sort by 24H% descending |
+| **Selection** | Take top 10 coins |
+| **Filter** | Market cap > $100M, exclude stablecoins, exclude wrapped tokens |
+| **Data Source** | CoinMarketCap `/v1/cryptocurrency/listings/latest` or CoinGecko `/coins/markets?order=percent_change_24h_desc` |
 
 #### Step 02 — Validate Bullish Candle (1D)
 
-Each coin from the top 10 must be validated against the daily chart. A setup is valid only if **ALL** of the following conditions are satisfied:
+Each of the top 10 coins MUST be validated against the daily chart. **ALL 5 criteria must be met simultaneously:**
 
 | Criterion | Definition | System Detection |
 |---|---|---|
-| Green candle | Close is higher than open | `close > open` on the last daily candle |
-| Large body | Candle body is at least 60% of total range (high-low) | `(close - open) / (high - low) >= 0.6` |
-| Minimal upper wick | Upper wick is no more than 20% of body | `(high - close) / (close - open) <= 0.2` |
-| Close > prior high | Today's close exceeds yesterday's high | `close[today] > high[yesterday]` |
-| High volume | Today's volume exceeds the 5-bar prior average | `volume[today] > mean(volume[today-5 : today-1])` |
+| **Green Candle** | Close higher than open | `close > open` on last daily candle |
+| **Large Body** | Candle body ≥60% of total range | `(close - open) / (high - low) >= 0.6` |
+| **Minimal Upper Wick** | Upper wick ≤20% of body | `(high - close) / (close - open) <= 0.2` |
+| **Close > Prior High** | Today's close > yesterday's high | `close[today] > high[yesterday]` (breakout) |
+| **High Volume** | Today's volume > 5-bar average | `volume[today] > mean(volume[today-5 : today-1])` |
 
-**If all 5 criteria are met:** asset enters the entry watchlist.
-**If any single criterion fails:** skip, move to next coin.
-**If 0 coins pass from the top 10:** skip that day entirely. No forced entry.
+**Outcome:**
+- **If all 5 met:** Coin enters entry watchlist.
+- **If any single criterion fails:** Skip, move to next coin.
+- **If 0 of 10 pass:** No entry today. Re-screen tomorrow.
 
-#### Step 03 — Entry and Stop Loss
+#### Step 03 — Entry & Stop Loss
 
-| Parameter | Value / Formula |
+| Parameter | Specification |
 |---|---|
-| Entry Time | Morning after screening (~07:15–07:30 WIB) |
-| Order Type | Market order or limit order near candle close price |
-| Stop Loss | Below the low of the trigger bullish candle |
-| Position Sizing | Based on user-defined risk per trade (e.g., 1–2% of capital) |
-| Sizing Formula | `units = (capital × risk%) / (entry_price - stop_loss_price)` |
+| **Entry Time** | Morning after screening (~07:15–07:30 WIB) |
+| **Order Type** | Market order or limit near candle close |
+| **Stop Loss** | Below low of trigger bullish candle |
+| **Position Sizing** | `units = (capital × risk%) / (entry_price - stop_loss_price)` |
+| **Risk Per Trade** | User-defined (typically 1–2% of capital) |
 
 #### Step 04 — Exit Management
 
 | Exit Condition | Action | Notes |
 |---|---|---|
 | Profit reaches +2R | Exit partial or full | 2R = profit 2× the risk taken |
-| Bearish candle forms | Exit immediately | Opposite of bullish criteria: large red body, close < prior low |
-| Trailing stop loss | Move SL below new higher low | Each time price makes a higher low, move SL there |
+| Bearish candle forms | Exit immediately | Opposite of bullish: large red body, close < prior low |
+| Trailing stop loss | Move SL below new higher low | Each new higher low, move SL |
 | No change | Hold | Re-evaluate next morning |
 
-### 7.5 Bearish Candle Exit Trigger Definition
+### 7.5 Bearish Candle Exit Trigger (ALL conditions required)
 
-A bearish candle is a valid exit signal when ALL of these conditions are met:
 - Red candle: `close < open`
 - Large body: `(open - close) / (high - low) >= 0.6`
-- Close is lower than prior candle's low
-- Volume above 5-bar average (optional but strengthens the signal)
+- Close lower than prior candle's low
+- Volume above 5-bar average (optional, strengthens signal)
 
-### 7.6 Core Logic Pseudocode
+### 7.6 Core Pseudocode
 
-```
+```pseudocode
 EVERY DAY AT 07:00 WIB:
 
-1. top_gainers = top 10 from /listings/latest sorted by 24h_change DESC
-2. Filter: market_cap > 100M, exclude stablecoin/wrapped token
+1. top_gainers = fetch top 10 from /listings/latest sorted by 24h_change DESC
+2. Filter: market_cap > 100M, exclude stablecoin, exclude wrapped_token
 3. For each coin in top_gainers:
    a. Fetch last 7 daily candles (OHLCV)
    b. candle_today = candle[-1], candle_prev = candle[-2]
    c. Check bullish criteria:
-      - close > open                              (green candle)
+      - close > open (green candle)
       - body_ratio = (close-open)/(high-low) >= 0.6
       - upper_wick_ratio = (high-close)/(close-open) <= 0.2
-      - close > candle_prev.high                 (breakout)
-      - volume > mean(volume[-6:-1])             (volume spike)
+      - close > candle_prev.high (breakout)
+      - volume > mean(volume[-6:-1]) (volume spike)
    d. If all 5 satisfied: add to watchlist_entry
 4. Output watchlist_entry to notification / dashboard
 5. Record stop_loss = low[candle_today] for each entry
 ```
 
-### 7.7 Scoring and Output
+### 7.7 Scoring & Output
 
 | Component | Weight | Notes |
 |---|---|---|
-| All 5 candle criteria satisfied | Gate (required) | Not satisfied = coin excluded entirely |
+| All 5 candle criteria satisfied | **Gate (required)** | Not satisfied = coin excluded |
 | 24H percentage change magnitude | 40% | Higher = more priority |
 | Volume spike ratio | 35% | `volume_today / avg_volume_5_days` — higher = better |
 | Candle body ratio | 25% | Larger body = stronger momentum |
 
-### 7.8 Model 4 vs Other Models
+### 7.8 Model Comparison Matrix
 
 | Aspect | Model 1 | Model 2 | Model 3 | Model 4 |
 |---|---|---|---|---|
-| Trade type | Reversal | Pre-breakout | Trend following | Momentum spot |
-| Position direction | Long / Short | Long / Short | Long / Short | Long only (SPOT) |
-| Coin universe | Rank 50–300 | Rank 20–150 | Rank 1–50 | Rank 1–200 (top gainers) |
-| Primary timeframe | 15M–4H | 4H–1D | 4H–1D | 1D |
-| Leverage | Optional | Optional | Optional | None |
-| Signal frequency | Several per day | Several per week | Several per week | Once per day (morning) |
-| Hold period | Hours to days | Days to weeks | Weeks | Days |
+| **Trade Type** | Reversal | Pre-breakout | Trend following | Momentum spot |
+| **Position Direction** | Long/Short | Long/Short | Long/Short | Long only (SPOT) |
+| **Coin Universe** | Rank 50–300 | Rank 20–150 | Rank 1–50 | Rank 1–200 |
+| **Primary Timeframe** | 15M–4H | 4H–1D | 4H–1D | 1D |
+| **Leverage** | Optional | Optional | Optional | **None** |
+| **Signal Frequency** | Several/day | Several/week | Several/week | Once/day |
+| **Hold Period** | Hours–days | Days–weeks | Weeks | Days |
+| **Run Schedule** | Every 15m | Every 4h | Every 4h | Daily 07:00 WIB |
+
+
 
 ---
 
-## 8. Data Sources and API Endpoints
+## 8. Data Sources & API Endpoints
 
 Use public APIs only.
 
-| Model | Provider | Endpoint | Data |
-|---|---|---|---|
-| Model 1–3 | CoinGecko | `/coins/markets` | Coin list + market cap + volume |
-| Model 1–4 | Binance | `/api/v3/klines` | OHLCV all timeframes |
-| Model 1–3 | Coinalyze | `/futures/open-interest` | Open Interest per coin |
-| Model 1–3 | Coinalyze | `/futures/funding-rate` | Historical funding rates |
-| Model 1–3 | Binance | `/api/v3/trades` | Raw trades (for CVD calculation) |
-| Model 4 | CoinMarketCap | `/v1/cryptocurrency/listings/latest` | Top 24H gainers |
-| Model 4 | CoinGecko | `/coins/{id}/ohlc` | Alternative daily OHLCV |
-| Model 4 | Binance | `/api/v3/klines?interval=1d` | Daily OHLCV |
+| Model(s) | Provider | Endpoint | Data | Purpose |
+|---|---|---|---|---|
+| 1–3 | CoinGecko | `/coins/markets` | List + market cap + volume | Coin universe |
+| 1–4 | Binance | `/api/v3/klines` | OHLCV all timeframes | Price action |
+| 1–3 | Coinalyze | `/futures/open-interest` | Open Interest history | Exhaustion confirmation |
+| 1–3 | Coinalyze | `/futures/funding-rate` | Funding rate history | Reversal confirmation |
+| 1–3 | Binance | `/api/v3/trades` | Raw trades | CVD calculation |
+| 4 | CoinMarketCap | `/v1/cryptocurrency/listings/latest` | Top 24H gainers | Momentum screening |
+| 4 | CoinGecko | `/coins/{id}/ohlc` | Daily OHLCV | Alternative candle data |
 
 ### 8.1 Recommended Libraries
 
-| Library | Purpose |
-|---|---|
-| pandas-ta / ta-lib | Calculate EMA, RSI, MACD, ATR, Swing H/L |
-| ccxt | Unified interface for OHLCV from multiple exchanges |
-| requests / axios | HTTP calls to REST APIs |
-| APScheduler (Python) | Daily task scheduler (Model 4 at 07:00 WIB) |
-| node-cron (Node.js) | Alternative scheduler for Node.js |
+| Library | Purpose | Language |
+|---|---|---|
+| pandas-ta | EMA, RSI, MACD, ATR, Swing H/L | Python |
+| ta-lib | Technical indicators | Python (or C binding) |
+| ccxt | Unified exchange OHLCV interface | Python / Node.js |
+| requests / axios | HTTP REST API calls | Python / Node.js |
+| APScheduler | Task scheduler | Python |
+| node-cron | Task scheduler | Node.js |
 
 ---
 
-## 9. Caching and Rate Limit Policy
+## 9. Filter Pipeline Architecture
 
-- Centralize all API requests in the data-fetcher service.
-- Cache market data in Redis and/or database storage.
-- Keep at least 200 OHLCV candles per symbol per timeframe.
-- Batch CoinGecko requests where possible.
-- Apply retry and timeout handling for all external requests.
-- Model services read from cache only — never call external APIs directly.
+### 9.1 Problem Statement
+
+If each model fetches its own coin universe from CoinGecko, there are 4 redundant API calls for identical data. Solution: 4-layer shared pipeline.
+
+### 9.2 Filter Pipeline (4 Layers)
+
+| Layer | Name | Frequency | Input | Output | Cache TTL |
+|---|---|---|---|---|---|
+| **Layer 1** | Shared Fetch | 1× per run (centralized) | CoinGecko API | Raw 300 coins (market cap, volume, 24h%) | 5 min |
+| **Layer 2** | Shared Pre-Filter | Immediately after L1 | L1 output | ~150–200 coins (stablecoins, wrapped removed) | Cache lifetime |
+| **Layer 3** | Model Secondary Filter | Per model from L2 | L2 output | 10–80 coins per model (model-specific rank/volume) | Cache lifetime |
+| **Layer 4** | Heavy Analysis | Per model, only for L3 output | OHLCV, OI, Funding, CVD APIs | Final 10 coins ranked + scored | Per-model cache |
+
+### 9.3 Layer 1 — Shared Fetch
+
+One API call, result cached for 5 minutes, shared to all models.
+
+```python
+# shared_fetch.py
+import requests, time
+
+_cache = {'data': None, 'ts': 0}
+CACHE_TTL = 300  # 5 minutes
+
+def get_market_data():
+    now = time.time()
+    if _cache['data'] and (now - _cache['ts']) < CACHE_TTL:
+        return _cache['data']
+    
+    url = 'https://api.coingecko.com/api/v3/coins/markets'
+    params = {
+        'vs_currency': 'usd',
+        'order': 'market_cap_desc',
+        'per_page': 300,
+        'page': 1,
+        'sparkline': False,
+        'price_change_percentage': '24h'
+    }
+    resp = requests.get(url, params=params, timeout=10)
+    resp.raise_for_status()
+    
+    _cache['data'] = resp.json()
+    _cache['ts'] = now
+    return _cache['data']
+```
+
+### 9.4 Layer 2 — Shared Pre-Filter
+
+Universal filters applied to all 300 coins. Result: ~150–200 coins.
+
+| Criterion | Rule | Reason |
+|---|---|---|
+| **NOT Stablecoin** | symbol not in {usdt, usdc, dai, busd, tusd, frax, usdd, usdp, gusd, lusd} | No meaningful price action |
+| **NOT Wrapped Token** | name not containing wrapped/wbtc/weth/steth/reth/cbeth | Price mirrors underlying |
+| **Minimum Volume** | total_volume >= $1,000,000 | <$1M too illiquid |
+| **Minimum Market Cap** | market_cap >= $50,000,000 | <$50M too risky, derivatives sparse |
+| **Data Present** | current_price and total_volume not null/0 | New coins may have incomplete data |
+
+```python
+# pre_filter.py
+STABLECOINS = {'usdt','usdc','dai','busd','tusd','frax','usdd','usdp','gusd','lusd'}
+WRAPPED_KW = ['wrapped','wbtc','weth','steth','reth','cbeth']
+
+def pre_filter(coins):
+    result = []
+    for c in coins:
+        sym = c['symbol'].lower()
+        name = c['name'].lower()
+        
+        if sym in STABLECOINS:
+            continue
+        if any(kw in name for kw in WRAPPED_KW):
+            continue
+        if (c.get('total_volume') or 0) < 1_000_000:
+            continue
+        if (c.get('market_cap') or 0) < 50_000_000:
+            continue
+        if not c.get('current_price'):
+            continue
+        
+        result.append(c)
+    
+    return result  # ~150-200 coins
+```
+
+### 9.5 Layer 3 — Model Secondary Filter
+
+Each model applies its own filters to Layer 2 output.
+
+```python
+# model_filters.py
+def filter_model1(coins):
+    """Model 1: Rank 50-300, volume >= 5M"""
+    return [c for c in coins
+            if 50 <= c.get('market_cap_rank', 999) <= 300
+            and (c.get('total_volume') or 0) >= 5_000_000]
+
+def filter_model2(coins):
+    """Model 2: Rank 20-150, volume >= 10M"""
+    return [c for c in coins
+            if 20 <= c.get('market_cap_rank', 999) <= 150
+            and (c.get('total_volume') or 0) >= 10_000_000]
+
+def filter_model3(coins):
+    """Model 3: Rank 1-50, volume >= 50M"""
+    return [c for c in coins
+            if c.get('market_cap_rank', 999) <= 50
+            and (c.get('total_volume') or 0) >= 50_000_000]
+
+def filter_model4(coins):
+    """Model 4: Top 10 gainers by 24h %"""
+    sorted_by_change = sorted(coins, 
+                              key=lambda x: x.get('price_change_percentage_24h', 0),
+                              reverse=True)
+    return sorted_by_change[:10]
+```
+
+### 9.6 Layer 4 — Heavy Analysis (Per Model)
+
+Only after Layer 3 filtering do we fetch expensive data (OHLCV, OI, Funding, CVD).
+
+- **Model 1:** Fetch OHLCV (1H/4H/15M) + OI + Funding + CVD for ~50–80 coins from L3. Heavy.
+- **Model 2:** Fetch OHLCV (4H/1H) + OI + Funding + CVD for ~40–60 coins from L3. Heavy.
+- **Model 3:** Fetch OHLCV (1D/4H) + OI + CVD for ~30–40 coins from L3. Medium.
+- **Model 4:** Fetch OHLCV (1D) for 10 coins from L3. Light.
+
+**Each model caches its Layer 3 subset separately** to avoid re-fetching when running again.
 
 ---
 
-## 10. Implementation Guidance and Edge Cases
+## 10. Caching & Rate Limiting Policy
 
-### 10.1 CVD Calculation
-- Pull trade/aggTrades data from Binance.
-- `isBuyerMaker = false` → treat as buy volume.
-- `isBuyerMaker = true` → treat as sell volume.
-- CVD = cumulative (buy volume − sell volume).
-- Use linear regression over recent CVD points for slope checks.
-- Reset daily at 00:00 UTC for consistency.
+### 10.1 Cache Strategy
 
-### 10.2 Liquidity Sweep Detection
-- Define old highs and lows from swings at least 10 candles back.
-- Detect equal highs and lows within tolerance bands.
-- A sweep is valid when the wick breaks the level but the candle body closes back inside the range.
-- Prefer 1H or 4H timeframes for robust sweep detection.
+| Data Type | TTL | Storage | Shared? |
+|---|---|---|---|
+| Market data (L1) | 5 min | Redis/DB | Yes (all models) |
+| Pre-filter result (L2) | 5 min | Redis/DB | Yes (all models) |
+| OHLCV | 60 sec | Redis/DB | Yes (same coin across models) |
+| OI, Funding | 120 sec | Redis/DB | Yes (same coin across models) |
+| CVD | 300 sec | Redis/DB | Yes (same coin across models) |
+| Model L3 subset | 60 sec | In-memory | Per model |
+| Model signal output | No cache | File/DB | Permanent (for audit trail) |
 
-### 10.3 MSS Detection
-- Build swing highs and lows from OHLCV data.
-- Bullish MSS: candle body CLOSE above prior swing high during a downtrend.
-- Bearish MSS: candle body CLOSE below prior swing low during an uptrend.
-- Wick-only breaks do NOT qualify as MSS.
+### 10.2 Rate Limiting
 
-### 10.4 Order Block Detection
-- Bearish OB for bullish reversal = last bearish candle before a strong up impulse.
-- Bullish OB for bearish reversal = last bullish candle before a strong down impulse.
-- OB zone is defined by that candle's high and low boundaries.
-- Price is "at OB" when close is inside the zone with a small tolerance.
+| API | Tier | Rate Limit | Strategy |
+|---|---|---|---|
+| **CoinGecko** | Free | 10–30 req/min | Batch requests, share Layer 1 fetch |
+| **Binance** | Public | 1200 req/min | No issue for our usage |
+| **Coinalyze** | Premium required | Custom | Batch historical requests during off-peak |
 
-### 10.5 ATR Compression Check (Model 2)
-- Calculate ATR 14-period from 4H OHLCV.
-- Compare against 30-day rolling average ATR.
-- ATR below the 30-day average signals compression.
-- Lower ATR relative to historical baseline = stronger compression signal.
+### 10.3 Retry & Timeout Policy
+
+- **Timeout:** 10 seconds for all external API calls.
+- **Retry:** 3 attempts with exponential backoff (1s, 2s, 4s).
+- **Circuit Breaker:** If API fails 5 consecutive times, skip that data source for 5 minutes.
+- **Fallback:** Use cached stale data rather than returning error to model.
 
 ---
 
-## 11. Agent Change Protocol
+## 11. Implementation Guidance
 
-When future agents modify this system, they MUST follow this order:
+### 11.1 CVD Calculation
 
-1. Verify whether the change affects one model or shared infrastructure.
-2. Keep model logic isolated unless the change is explicitly cross-model.
-3. Preserve the output schema and component scoring transparency.
-4. Do not add direct API calls to model services — all data comes from cache.
-5. Update cache and rate-limit handling when adding new data fields.
-6. Add or update tests for scoring logic, thresholds, and signal gates.
-7. Document any threshold changes and their expected behavioral impact.
+```
+CVD = cumulative(buy_volume - sell_volume)
+
+1. Fetch Binance /api/v3/trades or /fapi/v1/aggTrades
+2. For each trade:
+   - isBuyerMaker = false  → buy volume
+   - isBuyerMaker = true   → sell volume
+3. CVD = sum(buy_volume) - sum(sell_volume)
+4. Use linear regression for slope (recent 24 candles)
+5. Reset daily at 00:00 UTC
+```
+
+### 11.2 Liquidity Sweep Detection
+
+1. Define old highs and lows from swings ≥10 candles back.
+2. Detect equal highs/lows within tolerance (±0.5%).
+3. Sweep valid when: **wick breaks level BUT body closes inside range**.
+4. Prefer 1H or 4H for robustness.
+
+### 11.3 MSS Detection
+
+1. Build swing highs/lows from OHLCV.
+2. **Bullish MSS:** Candle body CLOSE > prior swing high (during downtrend).
+3. **Bearish MSS:** Candle body CLOSE < prior swing low (during uptrend).
+4. **Wick-only breaks do NOT qualify.**
+
+### 11.4 Order Block Detection
+
+- **Bearish OB** (for bullish reversal): Last bearish candle before strong up impulse.
+- **Bullish OB** (for bearish reversal): Last bullish candle before strong down impulse.
+- **OB zone:** High and low of that candle.
+- **Entry criterion:** Close inside zone with small tolerance.
+
+### 11.5 ATR Compression (Model 2)
+
+1. Calculate ATR 14-period from 4H OHLCV.
+2. Compare against 30-day rolling average ATR.
+3. **Compression:** ATR < 30-day average.
+4. **Stronger signal:** Lower ATR relative to baseline.
 
 ---
 
-## 12. Developer Checklist
+## 12. Agent Change Protocol
+
+When agents modify this system, they MUST follow this sequence:
+
+1. **Identify scope:** Does change affect one model or shared infrastructure?
+2. **Isolate model logic:** Keep changes isolated unless explicitly cross-model.
+3. **Preserve contracts:** Never change JSON output schema without version bump.
+4. **No direct API calls:** All model data must come from cache.
+5. **Update cache policy:** If adding new data fields, update caching rules.
+6. **Test scoring:** Add or update tests for scoring logic, thresholds, gates.
+7. **Document impact:** Explain threshold changes and behavioral impact.
+
+---
+
+## 13. Developer Checklist
 
 ### Infrastructure
-- [ ] Centralized data-fetcher service in place
-- [ ] Redis or equivalent cache in place
-- [ ] API rate-limit and retry policy implemented
-- [ ] Historical storage available for indicators and derivatives
-- [ ] Error handling and logging implemented
-- [ ] Notifier service implemented (Telegram or Discord)
-- [ ] Unit and integration tests maintained
+
+- [ ] Linux VPS (Ubuntu 20.04+ or Debian 11+) provisioned
+- [ ] Python 3.9+ or Node.js 18+ installed
+- [ ] Redis or PostgreSQL set up for caching
+- [ ] Required libraries installed (pandas-ta, ccxt, requests, APScheduler)
+- [ ] `.env` file created with API keys
+- [ ] Cron/scheduler configured for all 5 services
+- [ ] Notifier (Telegram/Discord) configured and tested
+- [ ] Logging system implemented for all services
+- [ ] Error handling with circuit breaker patterns implemented
+- [ ] Unit and integration tests framework set up
+
+### Shared Data Pipeline
+
+- [ ] Layer 1 (Shared Fetch) implemented: CoinGecko `/coins/markets` call
+- [ ] Layer 1 caching (5 min TTL) working
+- [ ] Layer 2 (Pre-Filter) implemented: stablecoins, wrapped tokens, min vol/cap excluded
+- [ ] Layer 2 result (~150–200 coins) cached
+- [ ] Cache hit/miss logging in place
+- [ ] Retry + timeout logic implemented (3 attempts, 10s timeout)
+- [ ] Circuit breaker for API failures in place
 
 ### Model 1 — Counter Trend
-- [ ] Separate service boundary maintained
-- [ ] Coin universe filter: rank 50–300, volume > $5M
-- [ ] Liquidity sweep detection validated (wick vs body close)
-- [ ] MSS body-close validation implemented (no wick-only)
-- [ ] FVG and OB detection logic implemented
-- [ ] OI decline confirmation tracked
-- [ ] Extreme funding rate confirmation tracked
-- [ ] Weighted scoring and JSON output validated
+
+- [ ] Separate service boundary: `service-counter-trend.py`
+- [ ] Layer 3 filter: rank 50–300, volume >= $5M
+- [ ] Liquidity sweep detection: wick vs body close logic
+- [ ] MSS detection: swing high/low calculation, body close validation
+- [ ] FVG/OB calculation: gap and order block logic
+- [ ] OI decline tracking: >5% drop detection
+- [ ] Funding rate extreme check: <-0.1% or >+0.1%
+- [ ] CVD divergence calculation: bearish div when price up, CVD down
+- [ ] Scoring weights applied: 40% sweep, 30% MSS, 15% FVG/OB, 8% OI, 7% funding
+- [ ] JSON output format validated (model, timestamp, results, components)
+- [ ] Score normalized to 0–100
+- [ ] Schedule: every 15 minutes
+- [ ] Logging: all signals with execution_id
+- [ ] Tests: pass/fail criteria for each component
 
 ### Model 2 — Pre-Pump Detector
-- [ ] Separate service boundary maintained
-- [ ] Coin universe filter: rank 20–150, volume > $10M, OI available
-- [ ] Persistent negative funding screening (3 consecutive 8H periods)
-- [ ] OI rising + price sideways detection implemented
-- [ ] ATR compression vs 30-day baseline implemented
-- [ ] CVD slope (quietly rising) implemented
-- [ ] RSI compression zone (45–55) implemented
-- [ ] Weighted scoring and JSON output validated
+
+- [ ] Separate service boundary: `service-pre-pump.py`
+- [ ] Layer 3 filter: rank 20–150, volume >= $10M
+- [ ] Persistent negative funding screening: 3 consecutive 8H periods < -0.05%
+- [ ] OI rising + price sideways: OI >10% in 24H, price <3% range
+- [ ] ATR compression: ATR 14 < 30-day average
+- [ ] Volume drying: 24H vol < 50% of 7-day avg
+- [ ] CVD divergence: CVD up in 24H while price flat
+- [ ] RSI compression: RSI between 45–55 for >5 candles on 4H
+- [ ] Scoring weights applied: 35% funding, 25% OI, 20% ATR, 12% CVD, 8% RSI
+- [ ] JSON output format validated
+- [ ] Score normalized to 0–100
+- [ ] Schedule: every 4 hours
+- [ ] Logging: all signals with execution_id
+- [ ] Tests: pass/fail for each component
 
 ### Model 3 — Trend Momentum
-- [ ] Separate service boundary maintained
-- [ ] Coin universe filter: rank 1–50, volume > $50M
-- [ ] EMA50 and EMA200 calculations on 1D timeframe
-- [ ] EMA gate: price > EMA50 > EMA200 required
-- [ ] EMA slope positive for 3+ consecutive days
-- [ ] RSI in 50–65 zone on 4H
-- [ ] MACD positive zone confirmed (12,26,9)
-- [ ] BOS continuity logic implemented
-- [ ] OI + CVD positive confirmation implemented
-- [ ] Weighted scoring and JSON output validated
 
-### Model 4 — Spot Gainers
-- [ ] Separate service boundary maintained
-- [ ] Coin universe: top 200 market cap, sorted 24H% descending, take top 10
-- [ ] Exclude: stablecoins (USDT, USDC, DAI, BUSD), wrapped tokens (WBTC, WETH), market cap < $100M
-- [ ] Fetch 7 daily candles from Binance `/api/v3/klines`
-- [ ] All 5 bullish candle criteria implemented (see Section 7.4 Step 02)
-- [ ] Volume ratio calculated: `volume_today / mean(volume[-6:-1])`
-- [ ] Body ratio calculated: `(close - open) / (high - low)`
-- [ ] Upper wick ratio calculated: `(high - close) / (close - open)`
-- [ ] Output: symbol, price, 24h%, volume_ratio, body_ratio, stop_loss, score
-- [ ] Stop loss = low of the trigger daily candle
-- [ ] Send notification if 1+ coins pass criteria
-- [ ] Send "No setup today" notification if 0 coins pass
-- [ ] No short positions, no leverage — SPOT ONLY
+- [ ] Separate service boundary: `service-trend-momentum.py`
+- [ ] Layer 3 filter: rank 1–50, volume >= $50M
+- [ ] EMA50 & EMA200 calculated on daily OHLCV
+- [ ] EMA gate: price > EMA50 > EMA200 required (hard skip if not)
+- [ ] EMA slope positive for ≥3 consecutive days
+- [ ] RSI 14 zone 50–65 check on 4H
+- [ ] MACD (12,26,9) calculated: MACD > Signal > 0, histogram positive
+- [ ] BOS detection: 4H close breaks prior swing high
+- [ ] OI rising + price rising: both >5% in 24H
+- [ ] CVD positive trending: last 24H
+- [ ] Scoring weights applied: 30% EMA, 25% MACD, 20% RSI, 15% BOS, 10% OI+CVD
+- [ ] JSON output format validated
+- [ ] Score normalized to 0–100
+- [ ] Schedule: every 4 hours
+- [ ] Logging: all signals with execution_id
+- [ ] Tests: pass/fail for each component
+
+### Model 4 — Spot Momentum Gainers
+
+- [ ] Separate service boundary: `service-spot-gainers.py`
+- [ ] Fetch top 10 from CoinMarketCap sorted by 24H% descending
+- [ ] Layer 3 filter: rank 1–200, market cap >= $100M
+- [ ] Exclude stablecoins: USDT, USDC, DAI, BUSD, etc.
+- [ ] Exclude wrapped tokens: WBTC, WETH, STETH, etc.
+- [ ] Fetch 7 daily candles from Binance `/api/v3/klines?interval=1d`
+- [ ] Bullish candle criteria implemented (all 5 required):
+  - [ ] Green candle: close > open
+  - [ ] Large body: (close-open)/(high-low) >= 0.6
+  - [ ] Minimal wick: (high-close)/(close-open) <= 0.2
+  - [ ] Close > prior high: close[today] > high[yesterday]
+  - [ ] High volume: volume[today] > mean(volume[-6:-1])
+- [ ] Volume ratio: volume_today / avg_5_day
+- [ ] Body ratio: (close-open)/(high-low)
+- [ ] Upper wick ratio: (high-close)/(close-open)
+- [ ] Output format: symbol, price, 24h%, volume_ratio, body_ratio, stop_loss, score
+- [ ] Stop loss: low of trigger daily candle
+- [ ] Scoring weights: gate (all 5 criteria), 40% change, 35% vol ratio, 25% body ratio
+- [ ] Notification if 1+ coins pass
+- [ ] Notification if 0 coins pass ("No setup today")
+- [ ] Schedule: daily at 07:00 WIB (UTC+7)
+- [ ] **SPOT ONLY verification:** No short positions, no leverage flags
+- [ ] Logging: all watchlist entries with execution_id
+- [ ] Tests: pass/fail for each criterion
+
+### Testing & Validation
+
+- [ ] Unit tests for all scoring functions
+- [ ] Integration tests for each model (fetch → filter → score → output)
+- [ ] Cache hit/miss tests
+- [ ] Retry logic tests (API failure scenarios)
+- [ ] JSON schema validation tests
+- [ ] End-to-end test: run all 5 services, verify output format
+- [ ] Performance test: execution time per model
 
 ---
 
-## 13. Final Scope Reminder
+## 14. Final Scope Reminder
 
-This is a **signal generation system only**.
-Trade execution must remain manual or be handled by a separate risk-managed execution layer.
-This system does not place orders, manage positions, or control any exchange account.
+**This is a SIGNAL GENERATION SYSTEM ONLY.**
+
+- Does NOT execute trades.
+- Does NOT manage positions.
+- Does NOT access exchange accounts.
+- Does NOT place orders.
+
+**Trade execution must be manual or handled by a separate risk-managed execution layer.**
