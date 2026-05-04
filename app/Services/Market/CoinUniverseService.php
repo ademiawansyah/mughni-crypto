@@ -284,7 +284,7 @@ class CoinUniverseService
         $maxPages = 4;
 
         for ($page = 1; $page <= $maxPages; $page++) {
-            $batch = $this->coinGeckoService->fetchCoinMarkets($page, 250);
+            $batch = $this->coinGeckoService->fetchCoinMarkets($page, 300);
 
             if (empty($batch)) {
                 break;

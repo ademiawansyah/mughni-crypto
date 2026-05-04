@@ -3,11 +3,8 @@
 namespace App\Console\Commands;
 
 use App\Jobs\CounterTrendJob;
-use App\Jobs\FetchMarketJob;
-use App\Jobs\MarketRegimeJob;
 use App\Jobs\MomentumJob;
 use App\Jobs\PrePumpJob;
-use App\Jobs\UpdateCoinUniverseJob;
 use App\Models\GeneralConfig;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
@@ -31,22 +28,7 @@ class RunAllCronJobsCommand extends Command
         $this->newLine();
 
         try {
-            // 1. Dispatch UpdateCoinUniverseJob
-            // $this->info('▶ Dispatching UpdateCoinUniverseJob...');
-            // UpdateCoinUniverseJob::dispatchSync();
-            // $this->line('  ✓ UpdateCoinUniverseJob completed');
-
-            // 2. Dispatch FetchMarketJob
-            $this->info('▶ Dispatching FetchMarketJob...');
-            FetchMarketJob::dispatchSync();
-            $this->line('  ✓ FetchMarketJob completed');
-
-            // 3. Dispatch MarketRegimeJob
-            // $this->info('▶ Dispatching MarketRegimeJob...');
-            // MarketRegimeJob::dispatchSync();
-            // $this->line('  ✓ MarketRegimeJob completed');
-
-            // 4. Dispatch CounterTrendJob (if enabled)
+            // 1. Dispatch CounterTrendJob (if enabled)
             // if (GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('counter_trend')) {
             //     $this->info('▶ Queueing CounterTrendJob...');
             //     CounterTrendJob::dispatch();
@@ -55,7 +37,7 @@ class RunAllCronJobsCommand extends Command
             //     $this->line('  ⊘ CounterTrendJob skipped (not enabled)');
             // }
 
-            // 5. Dispatch PrePumpJob (if enabled)
+            // 2. Dispatch PrePumpJob (if enabled)
             // if (GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('pre_pump')) {
             //     $this->info('▶ Queueing PrePumpJob...');
             //     PrePumpJob::dispatch();
@@ -64,7 +46,7 @@ class RunAllCronJobsCommand extends Command
             //     $this->line('  ⊘ PrePumpJob skipped (not enabled)');
             // }
 
-            // 6. Dispatch MomentumJob (if enabled)
+            // 3. Dispatch MomentumJob (if enabled)
             // if (GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('momentum')) {
             //     $this->info('▶ Queueing MomentumJob...');
             //     // MomentumJob::dispatch();

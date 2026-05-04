@@ -1,11 +1,8 @@
 <?php
 
 use App\Jobs\CounterTrendJob;
-use App\Jobs\FetchMarketJob;
-use App\Jobs\MarketRegimeJob;
 use App\Jobs\MomentumJob;
 use App\Jobs\PrePumpJob;
-use App\Jobs\UpdateCoinUniverseJob;
 use App\Models\GeneralConfig;
 use App\Services\Notification\NotificationService;
 use Illuminate\Foundation\Inspiring;
@@ -51,21 +48,6 @@ Artisan::command('notification:test-telegram {--chat_id=} {--bot=} {--action=BUY
     $this->info('Telegram test notification dispatched. Check your Telegram chat and application logs.');
     $this->line(sprintf('execution_id: %s', $executionId));
 })->purpose('Send a test Telegram trade signal notification');
-
-// Schedule::job(new FetchMarketJob)
-//     ->everyFiveMinutes()
-//     ->withoutOverlapping()
-//     ->when(fn(): bool => GeneralConfig::isCronEnabled());
-
-// Schedule::job(new MarketRegimeJob)
-//     ->everyFiveMinutes()
-//     ->withoutOverlapping()
-//     ->when(fn(): bool => GeneralConfig::isCronEnabled());
-
-// Schedule::job(new UpdateCoinUniverseJob)
-//     ->dailyAt('00:00')
-//     ->withoutOverlapping()
-//     ->when(fn(): bool => GeneralConfig::isCronEnabled());
 
 // Schedule::job(new CounterTrendJob)
 //     ->everyFifteenMinutes()
