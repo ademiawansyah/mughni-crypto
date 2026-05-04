@@ -2,6 +2,7 @@
 
 namespace App\Services\Market;
 
+use App\Models\GeneralConfig;
 use App\Models\MarketIndicator;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -100,7 +101,7 @@ class MarketRegimeService
      */
     private function fetchBtcIndicators(): array
     {
-        $timeframes = ['1h', '4h', '1d'];
+        $timeframes = GeneralConfig::getTimeframes();
         $indicators = [];
 
         foreach ($timeframes as $tf) {

@@ -10,7 +10,6 @@ use App\Models\GeneralConfig;
 use App\Services\Notification\NotificationService;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schedule;
 use Illuminate\Support\Str;
 
@@ -53,32 +52,32 @@ Artisan::command('notification:test-telegram {--chat_id=} {--bot=} {--action=BUY
     $this->line(sprintf('execution_id: %s', $executionId));
 })->purpose('Send a test Telegram trade signal notification');
 
-Schedule::job(new FetchMarketJob)
-    ->everyFiveMinutes()
-    ->withoutOverlapping()
-    ->when(fn(): bool => GeneralConfig::isCronEnabled());
+// Schedule::job(new FetchMarketJob)
+//     ->everyFiveMinutes()
+//     ->withoutOverlapping()
+//     ->when(fn(): bool => GeneralConfig::isCronEnabled());
 
-Schedule::job(new MarketRegimeJob)
-    ->everyFiveMinutes()
-    ->withoutOverlapping()
-    ->when(fn(): bool => GeneralConfig::isCronEnabled());
+// Schedule::job(new MarketRegimeJob)
+//     ->everyFiveMinutes()
+//     ->withoutOverlapping()
+//     ->when(fn(): bool => GeneralConfig::isCronEnabled());
 
-Schedule::job(new UpdateCoinUniverseJob)
-    ->dailyAt('00:00')
-    ->withoutOverlapping()
-    ->when(fn(): bool => GeneralConfig::isCronEnabled());
+// Schedule::job(new UpdateCoinUniverseJob)
+//     ->dailyAt('00:00')
+//     ->withoutOverlapping()
+//     ->when(fn(): bool => GeneralConfig::isCronEnabled());
 
-Schedule::job(new CounterTrendJob)
-    ->everyFifteenMinutes()
-    ->withoutOverlapping()
-    ->when(fn(): bool => GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('counter_trend'));
+// Schedule::job(new CounterTrendJob)
+//     ->everyFifteenMinutes()
+//     ->withoutOverlapping()
+//     ->when(fn(): bool => GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('counter_trend'));
 
-Schedule::job(new PrePumpJob)
-    ->everyThirtyMinutes()
-    ->withoutOverlapping()
-    ->when(fn(): bool => GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('pre_pump'));
+// Schedule::job(new PrePumpJob)
+//     ->everyThirtyMinutes()
+//     ->withoutOverlapping()
+//     ->when(fn(): bool => GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('pre_pump'));
 
-Schedule::job(new MomentumJob)
-    ->hourly()
-    ->withoutOverlapping()
-    ->when(fn(): bool => GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('momentum'));
+// Schedule::job(new MomentumJob)
+//     ->hourly()
+//     ->withoutOverlapping()
+//     ->when(fn(): bool => GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('momentum'));

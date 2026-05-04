@@ -47,21 +47,24 @@ class CoinGeckoService
      *
      * @param  string  $coin  CoinGecko coin ID (e.g. 'bitcoin')
      * @param  int  $days  Number of days of historical data to fetch
+     * @param  string|null  $interval  Optional fixed granularity (hourly|daily)
      * @return array{
      *     request_params: array<string, mixed>,
      *     raw_response: array<string, mixed>,
      *     prices: array<int, float>,
+     *     price_points: array<int, array{timestamp_ms: int, price: float}>,
      * }|null  Returns null when the API call fails entirely.
      */
-    public function fetchMarketChart(string $coin, int $days = 1): ?array
+    public function fetchMarketChart(string $coin, int $days = 1, ?string $interval = null): ?array
     {
-        $cacheKey = "coingecko_market_chart_{$coin}_{$days}_{$this->vsCurrency}";
+        $intervalKey = $interval !== null ? strtolower(trim($interval)) : 'auto';
+        $cacheKey = "coingecko_market_chart_{$coin}_{$days}_{$intervalKey}_{$this->vsCurrency}";
 
         if (Cache::has($cacheKey)) {
             return Cache::get($cacheKey);
         }
 
-        $result = $this->doFetchMarketChart($coin, $days);
+        $result = $this->doFetchMarketChart($coin, $days, $interval);
 
         if ($result !== null) {
             Cache::put($cacheKey, $result, now()->addMinutes(self::CACHE_TTL_MINUTES));
@@ -140,18 +143,26 @@ class CoinGeckoService
      *
      * @param  string  $coin  CoinGecko coin ID
      * @param  int  $days  Number of days of data
+     * @param  string|null  $interval  Optional fixed granularity (hourly|daily)
      * @return array{
      *     request_params: array<string, mixed>,
      *     raw_response: array<string, mixed>,
      *     prices: array<int, float>,
+     *     price_points: array<int, array{timestamp_ms: int, price: float}>,
      * }|null
      */
-    private function doFetchMarketChart(string $coin, int $days): ?array
+    private function doFetchMarketChart(string $coin, int $days, ?string $interval): ?array
     {
         $params = [
             'vs_currency' => $this->vsCurrency,
             'days' => $days,
         ];
+
+        $normalizedInterval = $interval !== null ? strtolower(trim($interval)) : null;
+
+        if ($normalizedInterval !== null && in_array($normalizedInterval, ['hourly', 'daily'], true)) {
+            $params['interval'] = $normalizedInterval;
+        }
 
         $request = Http::timeout($this->timeout)->baseUrl($this->baseUrl);
 
@@ -186,13 +197,28 @@ class CoinGeckoService
 
         $rawResponse = $response->json();
 
-        // Extract only the price values from the [timestamp, price] pairs.
-        $prices = array_map(fn($item) => (float) $item[1], $rawResponse['prices'] ?? []);
+        /** @var array<int, array{timestamp_ms: int, price: float}> $pricePoints */
+        $pricePoints = [];
+
+        foreach ((array) ($rawResponse['prices'] ?? []) as $item) {
+            if (! is_array($item) || count($item) < 2) {
+                continue;
+            }
+
+            $pricePoints[] = [
+                'timestamp_ms' => (int) $item[0],
+                'price' => (float) $item[1],
+            ];
+        }
+
+        // Keep a flat prices array for backward compatibility with existing consumers.
+        $prices = array_map(static fn(array $item): float => $item['price'], $pricePoints);
 
         return [
             'request_params' => array_merge(['coin' => $coin], $params),
             'raw_response' => $rawResponse,
             'prices' => $prices,
+            'price_points' => $pricePoints,
         ];
     }
 }

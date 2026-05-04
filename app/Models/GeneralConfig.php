@@ -84,7 +84,7 @@ class GeneralConfig extends Model
         $coins = static::getArray('coins', self::DEFAULT_COINS);
 
         $normalized = array_values(array_unique(array_filter(array_map(
-            static fn (string $coin): string => strtolower(trim($coin)),
+            static fn(string $coin): string => strtolower(trim($coin)),
             $coins,
         ))));
 
@@ -111,9 +111,9 @@ class GeneralConfig extends Model
         $timeframes = static::getArray('timeframes', self::DEFAULT_TIMEFRAMES);
 
         $normalized = array_values(array_unique(array_filter(array_map(
-            static fn (string $timeframe): string => strtolower(trim($timeframe)),
+            static fn(string $timeframe): string => strtolower(trim($timeframe)),
             $timeframes,
-        ), static fn (string $timeframe): bool => preg_match('/^\d+(m|h)$/', $timeframe) === 1)));
+        ), static fn(string $timeframe): bool => preg_match('/^\d+(m|h|d)$/', $timeframe) === 1)));
 
         return $normalized === [] ? self::DEFAULT_TIMEFRAMES : $normalized;
     }

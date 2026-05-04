@@ -65,7 +65,6 @@ class CoinUniverseService
      * Stablecoin CoinGecko IDs to exclude
      */
     private const STABLECOINS = [
-        'bitcoin',
         'tether',
         'usd-coin',
         'binance-usd',

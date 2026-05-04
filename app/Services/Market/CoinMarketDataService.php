@@ -2,6 +2,7 @@
 
 namespace App\Services\Market;
 
+use App\Jobs\CoinMarketDataJob;
 use App\Models\MarketIndicator;
 use App\Models\MarketRaw;
 use App\Services\External\BinanceFuturesService;
@@ -9,12 +10,17 @@ use App\Services\External\CoinGeckoService;
 use App\Services\Indicator\IndicatorService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
-use App\Jobs\CoinMarketDataJob;
 
 class CoinMarketDataService
 {
     /** Minimum number of price data points required to compute indicators. */
     private const MIN_PRICES = 21;
+
+    private const FEED_FAST = 'fast_5m';
+
+    private const FEED_HOURLY = 'hourly';
+
+    private const FEED_DAILY = 'daily';
 
     public function __construct(
         private readonly CoinGeckoService $coinGeckoService,
@@ -30,83 +36,267 @@ class CoinMarketDataService
      */
     public function ingest(string $coin, array $timeframes, string $executionId): void
     {
-        $payload = $this->coinGeckoService->fetchMarketChart($coin);
+        $sortedTimeframes = $this->sortTimeframes($timeframes);
+        $requiredFeeds = $this->resolveRequiredFeeds($sortedTimeframes);
 
-        if ($payload === null) {
-            Log::error('[CoinMarketDataService] Ingestion aborted — no data returned for coin', [
+        if ($requiredFeeds === []) {
+            Log::warning('[CoinMarketDataService] Ingestion skipped — no supported timeframe configured', [
                 'execution_id' => $executionId,
                 'coin' => $coin,
+                'timeframes' => $sortedTimeframes,
             ]);
-
-            // retry coin market data job later — likely a throtling or transient API issue
-            CoinMarketDataJob::dispatch($coin, $timeframes, $executionId)->delay(now()->addMinutes(1));
 
             return;
         }
 
-        $timestamp = Carbon::now();
+        $feedPayloads = $this->fetchRequiredMarketFeeds($coin, $requiredFeeds, $sortedTimeframes, $executionId);
 
-        $this->storeRaw(
-            coin: $coin,
-            endpoint: 'market_chart',
-            source: 'coingecko',
-            timestamp: $timestamp,
-            requestParams: $payload['request_params'],
-            rawResponse: $payload['raw_response'],
-            executionId: $executionId,
-        );
+        if ($feedPayloads === null) {
+            return;
+        }
 
         $derivatives = $this->fetchDerivativesSnapshot($coin, $executionId);
 
-        /** @var array<int, float> $prices */
-        $prices = $payload['prices'];
+        foreach ($sortedTimeframes as $timeframe) {
+            $processed = $this->processTimeframe(
+                $coin,
+                $timeframe,
+                $feedPayloads,
+                $derivatives,
+                $sortedTimeframes,
+                $executionId,
+            );
 
-        if (count($prices) < self::MIN_PRICES) {
-            Log::warning('[CoinMarketDataService] Not enough price data for indicator calculation — skipping', [
-                'execution_id' => $executionId,
-                'coin' => $coin,
-                'count' => count($prices),
-                'required' => self::MIN_PRICES,
-            ]);
+            if (! $processed) {
+                return;
+            }
+        }
+    }
 
-            return;
+    /**
+     * @param  array<string, array<string, mixed>>  $feedPayloads
+     * @param  array{open_interest: float|null, funding_rate: float|null, cvd: float|null, cvd_slope: float|null}  $derivatives
+     * @param  array<string>  $sortedTimeframes
+     */
+    private function processTimeframe(
+        string $coin,
+        string $timeframe,
+        array $feedPayloads,
+        array $derivatives,
+        array $sortedTimeframes,
+        string $executionId,
+    ): bool {
+        $feedName = $this->resolveFeedForTimeframe($timeframe);
+
+        if ($feedName === null) {
+            return $this->retryAndAbort(
+                '[CoinMarketDataService] Unsupported timeframe configuration',
+                $coin,
+                $sortedTimeframes,
+                $executionId,
+                ['timeframe' => $timeframe],
+            );
         }
 
-        $seriesByTimeframe = $this->buildSeriesByTimeframe($prices, $timeframes);
+        $payload = $feedPayloads[$feedName] ?? null;
 
-        Log::info('[CoinMarketDataService] MTF candle series prepared', [
+        if ($payload === null) {
+            return $this->retryAndAbort(
+                '[CoinMarketDataService] Missing required feed payload',
+                $coin,
+                $sortedTimeframes,
+                $executionId,
+                [
+                    'feed' => $feedName,
+                    'timeframe' => $timeframe,
+                ],
+            );
+        }
+
+        $series = $this->buildSeriesForTimeframe(
+            (array) ($payload['price_points'] ?? []),
+            $timeframe,
+        );
+
+        if (count($series['prices']) < self::MIN_PRICES) {
+            return $this->retryAndAbort(
+                '[CoinMarketDataService] Not enough derived data for timeframe',
+                $coin,
+                $sortedTimeframes,
+                $executionId,
+                [
+                    'timeframe' => $timeframe,
+                    'feed' => $feedName,
+                    'count' => count($series['prices']),
+                    'required' => self::MIN_PRICES,
+                ],
+            );
+        }
+
+        $indicators = $this->indicatorService->calculateFromPrices($series['prices']);
+
+        if ($indicators === null) {
+            return $this->retryAndAbort(
+                '[CoinMarketDataService] Indicator calculation returned null',
+                $coin,
+                $sortedTimeframes,
+                $executionId,
+                ['timeframe' => $timeframe],
+            );
+        }
+
+        $lastTimestamp = end($series['timestamps']);
+
+        if (! is_int($lastTimestamp)) {
+            return $this->retryAndAbort(
+                '[CoinMarketDataService] Missing candle close timestamp',
+                $coin,
+                $sortedTimeframes,
+                $executionId,
+                ['timeframe' => $timeframe],
+            );
+        }
+
+        $this->storeIndicator(
+            $coin,
+            $timeframe,
+            Carbon::createFromTimestampUTC($lastTimestamp),
+            $indicators,
+            $derivatives,
+            $executionId,
+        );
+
+        return true;
+    }
+
+    /**
+     * @param  array<string>  $timeframes
+     * @return array<string, array{days: int, interval: string|null, endpoint: string}>
+     */
+    private function resolveRequiredFeeds(array $timeframes): array
+    {
+        $feeds = [];
+
+        foreach ($timeframes as $timeframe) {
+            $feedName = $this->resolveFeedForTimeframe($timeframe);
+
+            if ($feedName === self::FEED_FAST) {
+                $feeds[self::FEED_FAST] = [
+                    'days' => 1,
+                    'interval' => null,
+                    'endpoint' => 'market_chart_auto_1d',
+                ];
+            }
+
+            if ($feedName === self::FEED_HOURLY) {
+                $feeds[self::FEED_HOURLY] = [
+                    'days' => 30,
+                    'interval' => 'hourly',
+                    'endpoint' => 'market_chart_hourly_30d',
+                ];
+            }
+
+            if ($feedName === self::FEED_DAILY) {
+                $feeds[self::FEED_DAILY] = [
+                    'days' => 30,
+                    'interval' => 'daily',
+                    'endpoint' => 'market_chart_daily_30d',
+                ];
+            }
+        }
+
+        return $feeds;
+    }
+
+    /**
+     * @param  array<string, array{days: int, interval: string|null, endpoint: string}>  $requiredFeeds
+     * @param  array<string>  $sortedTimeframes
+     * @return array<string, array<string, mixed>>|null
+     */
+    private function fetchRequiredMarketFeeds(string $coin, array $requiredFeeds, array $sortedTimeframes, string $executionId): ?array
+    {
+        $result = [];
+
+        foreach ($requiredFeeds as $feedName => $feedSpec) {
+            $payload = $this->coinGeckoService->fetchMarketChart(
+                $coin,
+                (int) $feedSpec['days'],
+                $feedSpec['interval'],
+            );
+
+            if ($payload === null) {
+                $this->retryAndAbort(
+                    '[CoinMarketDataService] Required CoinGecko feed failed',
+                    $coin,
+                    $sortedTimeframes,
+                    $executionId,
+                    [
+                        'feed' => $feedName,
+                        'days' => $feedSpec['days'],
+                        'interval' => $feedSpec['interval'],
+                    ],
+                );
+
+                return null;
+            }
+
+            $this->storeRaw(
+                coin: $coin,
+                endpoint: $feedSpec['endpoint'],
+                source: 'coingecko',
+                timestamp: now(),
+                requestParams: (array) ($payload['request_params'] ?? []),
+                rawResponse: (array) ($payload['raw_response'] ?? []),
+                executionId: $executionId,
+            );
+
+            $result[$feedName] = $payload;
+        }
+
+        return $result;
+    }
+
+    /**
+     * Log error details, schedule a retry, and return false for early abort flow.
+     *
+     * @param  array<string, mixed>  $context
+     * @param  array<string>  $sortedTimeframes
+     */
+    private function retryAndAbort(
+        string $message,
+        string $coin,
+        array $sortedTimeframes,
+        string $executionId,
+        array $context = [],
+    ): bool {
+        Log::error($message, array_merge([
             'execution_id' => $executionId,
             'coin' => $coin,
-            'counts' => array_map(static fn(array $series): int => count($series), $seriesByTimeframe),
+        ], $context));
+
+        $this->dispatchRetry($coin, $sortedTimeframes, $executionId);
+
+        return false;
+    }
+
+    /**
+     * Re-dispatch the coin ingestion job when feed or derivation is incomplete.
+     *
+     * @param  array<string>  $sortedTimeframes
+     */
+    private function dispatchRetry(string $coin, array $sortedTimeframes, string $executionId): void
+    {
+        $delaySeconds = random_int(10, 30);
+
+        CoinMarketDataJob::dispatch($coin, $sortedTimeframes, $executionId)
+            ->delay(now()->addSeconds($delaySeconds));
+
+        Log::warning('[CoinMarketDataService] Coin job re-dispatched', [
+            'execution_id' => $executionId,
+            'coin' => $coin,
+            'timeframes' => $sortedTimeframes,
+            'delay_seconds' => $delaySeconds,
         ]);
-
-        foreach ($seriesByTimeframe as $derivedTimeframe => $series) {
-            if (count($series) < self::MIN_PRICES) {
-                Log::warning('[CoinMarketDataService] Not enough derived data for timeframe — skipping', [
-                    'execution_id' => $executionId,
-                    'coin' => $coin,
-                    'timeframe' => $derivedTimeframe,
-                    'count' => count($series),
-                    'required' => self::MIN_PRICES,
-                ]);
-
-                continue;
-            }
-
-            $indicators = $this->indicatorService->calculateFromPrices($series);
-
-            if ($indicators === null) {
-                Log::warning('[CoinMarketDataService] Indicator calculation returned null — skipping timeframe', [
-                    'execution_id' => $executionId,
-                    'coin' => $coin,
-                    'timeframe' => $derivedTimeframe,
-                ]);
-
-                continue;
-            }
-
-            $this->storeIndicator($coin, $derivedTimeframe, $timestamp, $indicators, $derivatives, $executionId);
-        }
     }
 
     /**
@@ -270,80 +460,88 @@ class CoinMarketDataService
     }
 
     /**
-     * Build close-price series for all MTF roles from one base dataset.
+     * Build timeframe-aligned close-price series from [timestamp, price] points.
      *
-     * @param  array<int, float>  $basePrices
-     * @param  array<string>  $timeframes
-     * @return array<string, array<int, float>>
+     * @param  array<int, array{timestamp_ms: int, price: float}>  $pricePoints
+     * @return array{prices: array<int, float>, timestamps: array<int, int>}
      */
-    private function buildSeriesByTimeframe(array $basePrices, array $timeframes): array
+    private function buildSeriesForTimeframe(array $pricePoints, string $timeframe): array
     {
-        $sortedTimeframes = $this->sortTimeframes($timeframes);
+        $targetMinutes = $this->timeframeToMinutes($timeframe);
 
-        if ($sortedTimeframes === []) {
-            return [];
+        if ($targetMinutes === PHP_INT_MAX || $targetMinutes <= 0) {
+            return [
+                'prices' => [],
+                'timestamps' => [],
+            ];
         }
 
-        $baseTimeframe = $sortedTimeframes[0];
-        $baseMinutes = $this->timeframeToMinutes($baseTimeframe);
+        $bucketSeconds = $targetMinutes * 60;
+        $nowSeconds = now()->utc()->timestamp;
 
-        $series = [];
+        /** @var array<int, float> $bucketCloses */
+        $bucketCloses = [];
 
-        foreach ($sortedTimeframes as $timeframe) {
-            $targetMinutes = $this->timeframeToMinutes($timeframe);
+        foreach ($pricePoints as $point) {
+            $timestampMs = (int) ($point['timestamp_ms'] ?? 0);
+            $price = (float) ($point['price'] ?? 0.0);
 
-            if ($targetMinutes === PHP_INT_MAX || $baseMinutes === PHP_INT_MAX || $targetMinutes < $baseMinutes) {
-                Log::warning('[CoinMarketDataService] Unsupported timeframe for aggregation — skipping', [
-                    'timeframe' => $timeframe,
-                    'base_timeframe' => $baseTimeframe,
-                ]);
-
+            if ($timestampMs <= 0) {
                 continue;
             }
 
-            if ($targetMinutes % $baseMinutes !== 0) {
-                Log::warning('[CoinMarketDataService] Timeframe not divisible by base timeframe — skipping', [
-                    'timeframe' => $timeframe,
-                    'base_timeframe' => $baseTimeframe,
-                ]);
+            $timestampSeconds = intdiv($timestampMs, 1000);
+            $bucketStart = intdiv($timestampSeconds, $bucketSeconds) * $bucketSeconds;
+            $bucketClose = $bucketStart + $bucketSeconds;
 
+            // Use only closed candles to avoid unstable last-candle indicators.
+            if ($bucketClose > $nowSeconds) {
                 continue;
             }
 
-            $factor = (int) ($targetMinutes / $baseMinutes);
-
-            if ($factor <= 1) {
-                $series[$timeframe] = array_values($basePrices);
-
-                continue;
-            }
-
-            $series[$timeframe] = $this->aggregateByFactor($basePrices, $factor);
+            $bucketCloses[$bucketStart] = $price;
         }
 
-        return $series;
+        if ($bucketCloses === []) {
+            return [
+                'prices' => [],
+                'timestamps' => [],
+            ];
+        }
+
+        ksort($bucketCloses);
+
+        $prices = [];
+        $timestamps = [];
+
+        foreach ($bucketCloses as $bucketStart => $closePrice) {
+            $prices[] = (float) $closePrice;
+            $timestamps[] = (int) $bucketStart + $bucketSeconds;
+        }
+
+        return [
+            'prices' => $prices,
+            'timestamps' => $timestamps,
+        ];
     }
 
-    /**
-     * Aggregate a close series by fixed factor using the last price per bucket.
-     *
-     * @param  array<int, float>  $prices
-     * @return array<int, float>
-     */
-    private function aggregateByFactor(array $prices, int $factor): array
+    private function resolveFeedForTimeframe(string $timeframe): ?string
     {
-        $chunks = array_chunk(array_values($prices), $factor);
-        $aggregated = [];
+        $normalized = strtolower(trim($timeframe));
 
-        foreach ($chunks as $chunk) {
-            if ($chunk === []) {
-                continue;
-            }
-
-            $aggregated[] = (float) end($chunk);
+        if (preg_match('/^\d+m$/', $normalized) === 1) {
+            return self::FEED_FAST;
         }
 
-        return $aggregated;
+        if (preg_match('/^\d+h$/', $normalized) === 1) {
+            return self::FEED_HOURLY;
+        }
+
+        if (preg_match('/^\d+d$/', $normalized) === 1) {
+            return self::FEED_DAILY;
+        }
+
+        return null;
     }
 
     /**
