@@ -97,6 +97,7 @@ class CoinGeckoService
             'per_page' => $perPage,
             'page' => $page,
             'sparkline' => 'false',
+            'price_change_percentage' => '24h',
         ];
 
         try {
@@ -129,7 +130,7 @@ class CoinGeckoService
 
         return $data;
 
-        return array_map(fn(array $coin): array => [
+        return array_map(fn (array $coin): array => [
             'id' => (string) ($coin['id'] ?? ''),
             'symbol' => strtoupper((string) ($coin['symbol'] ?? '')),
             'market_cap' => is_numeric($coin['market_cap'] ?? null) ? (float) $coin['market_cap'] : null,
@@ -212,7 +213,7 @@ class CoinGeckoService
         }
 
         // Keep a flat prices array for backward compatibility with existing consumers.
-        $prices = array_map(static fn(array $item): float => $item['price'], $pricePoints);
+        $prices = array_map(static fn (array $item): float => $item['price'], $pricePoints);
 
         return [
             'request_params' => array_merge(['coin' => $coin], $params),

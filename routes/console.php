@@ -1,6 +1,7 @@
 <?php
 
 use App\Jobs\CounterTrendJob;
+use App\Jobs\Layer1RawCoinFetchJob;
 use App\Jobs\MomentumJob;
 use App\Jobs\PrePumpJob;
 use App\Models\GeneralConfig;
@@ -48,6 +49,18 @@ Artisan::command('notification:test-telegram {--chat_id=} {--bot=} {--action=BUY
     $this->info('Telegram test notification dispatched. Check your Telegram chat and application logs.');
     $this->line(sprintf('execution_id: %s', $executionId));
 })->purpose('Send a test Telegram trade signal notification');
+
+/**
+ * ============================================================================
+ * LAYER 1: SHARED FETCH (Every 5 minutes)
+ * ============================================================================
+ * Centralized market data fetcher. Fetches top 300 coins from CoinGecko
+ * and persists to coins table. All models consume database data from coins table.
+ */
+Schedule::job(new Layer1RawCoinFetchJob)
+    ->everyFiveMinutes()
+    ->withoutOverlapping()
+    ->when(fn (): bool => GeneralConfig::isCronEnabled());
 
 // Schedule::job(new CounterTrendJob)
 //     ->everyFifteenMinutes()
