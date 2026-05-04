@@ -61,11 +61,11 @@ return [
         'vs_currency' => env('COINGECKO_VS_CURRENCY', 'usd'),
     ],
 
-    'binance_futures' => [
-        'enabled' => (bool) env('BINANCE_FUTURES_ENABLED', true),
-        'base_url' => env('BINANCE_FUTURES_BASE_URL', 'https://fapi.binance.com'),
-        'timeout' => (int) env('BINANCE_FUTURES_TIMEOUT', 10),
-        'cache_ttl_seconds' => (int) env('BINANCE_FUTURES_CACHE_TTL_SECONDS', 120),
+    'binance' => [
+        'base_url' => env('BINANCE_BASE_URL', 'https://api.binance.com'),
+        'api_key' => env('BINANCE_API_KEY'),
+        'api_secret' => env('BINANCE_API_SECRET'),
+        'timeout' => (int) env('BINANCE_TIMEOUT', 10),
     ],
 
 ];

@@ -26,7 +26,7 @@ class SharedFetchService
     private const FRESHNESS_WINDOW_MINUTES = 5;
 
     /** Rows requested per CoinGecko page. */
-    private const FETCH_PER_PAGE = 100;
+    private const FETCH_PER_PAGE = 101;
 
     /** Number of pages requested from CoinGecko. */
     private const FETCH_PAGE_COUNT = 3;

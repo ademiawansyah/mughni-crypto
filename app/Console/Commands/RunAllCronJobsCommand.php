@@ -29,22 +29,22 @@ class RunAllCronJobsCommand extends Command
         try {
 
             // Layer 1: Shared Fetch (always runs first)
-            // if (GeneralConfig::isCronEnabled()) {
-            //     $this->info('▶ Running Layer 1: Shared Fetch (Layer1RawCoinFetchJob)...');
-            //     Layer1RawCoinFetchJob::dispatchSync($executionId);
-            //     $this->line('  ✓ Layer 1: Shared Fetch completed');
-            // } else {
-            //     $this->line('  ⊘ Layer 1: Shared Fetch skipped (cron disabled)');
-            // }
+            if (GeneralConfig::isCronEnabled()) {
+                $this->info('▶ Running Layer 1: Shared Fetch (Layer1RawCoinFetchJob)...');
+                Layer1RawCoinFetchJob::dispatchSync($executionId);
+                $this->line('  ✓ Layer 1: Shared Fetch completed');
+            } else {
+                $this->line('  ⊘ Layer 1: Shared Fetch skipped (cron disabled)');
+            }
 
             // Layer 2: Pre-Filter (always runs after Layer 1)
-            if (GeneralConfig::isCronEnabled()) {
-                $this->info('▶ Running Layer 2: Pre-Filter (Layer2Pre   FilterCoinJob)...');
-                Layer2PreFilterCoinJob::dispatchSync($executionId);
-                $this->line('  ✓ Layer 2: Pre-Filter completed');
-            } else {
-                $this->line('  ⊘ Layer 2: Pre-Filter skipped (  cron disabled)');
-            }
+            // if (GeneralConfig::isCronEnabled()) {
+            //     $this->info('▶ Running Layer 2: Pre-Filter (Layer2Pre   FilterCoinJob)...');
+            //     Layer2PreFilterCoinJob::dispatchSync($executionId);
+            //     $this->line('  ✓ Layer 2: Pre-Filter completed');
+            // } else {
+            //     $this->line('  ⊘ Layer 2: Pre-Filter skipped (  cron disabled)');
+            // }
 
             $this->newLine();
             $this->info('✅ All cron jobs completed successfully!');
