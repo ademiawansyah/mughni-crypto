@@ -2,11 +2,8 @@
 
 namespace App\Console\Commands;
 
-use App\Jobs\CounterTrendJob;
 use App\Jobs\Layer1RawCoinFetchJob;
 use App\Jobs\Layer2PreFilterCoinJob;
-use App\Jobs\MomentumJob;
-use App\Jobs\PrePumpJob;
 use App\Models\GeneralConfig;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
@@ -48,33 +45,6 @@ class RunAllCronJobsCommand extends Command
             } else {
                 $this->line('  ⊘ Layer 2: Pre-Filter skipped (  cron disabled)');
             }
-
-            // 1. Dispatch CounterTrendJob (if enabled)
-            // if (GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('counter_trend')) {
-            //     $this->info('▶ Queueing CounterTrendJob...');
-            //     CounterTrendJob::dispatch();
-            //     $this->line('  ✓ CounterTrendJob queued');
-            // } else {
-            //     $this->line('  ⊘ CounterTrendJob skipped (not enabled)');
-            // }
-
-            // 2. Dispatch PrePumpJob (if enabled)
-            // if (GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('pre_pump')) {
-            //     $this->info('▶ Queueing PrePumpJob...');
-            //     PrePumpJob::dispatch();
-            //     $this->line('  ✓ PrePumpJob queued');
-            // } else {
-            //     $this->line('  ⊘ PrePumpJob skipped (not enabled)');
-            // }
-
-            // 3. Dispatch MomentumJob (if enabled)
-            // if (GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('momentum')) {
-            //     $this->info('▶ Queueing MomentumJob...');
-            //     // MomentumJob::dispatch();
-            //     $this->line('  ✓ MomentumJob queued');
-            // } else {
-            //     $this->line('  ⊘ MomentumJob skipped (not enabled)');
-            // }
 
             $this->newLine();
             $this->info('✅ All cron jobs completed successfully!');

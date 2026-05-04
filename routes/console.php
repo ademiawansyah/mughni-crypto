@@ -1,9 +1,6 @@
 <?php
 
-use App\Jobs\CounterTrendJob;
 use App\Jobs\Layer1RawCoinFetchJob;
-use App\Jobs\MomentumJob;
-use App\Jobs\PrePumpJob;
 use App\Models\GeneralConfig;
 use App\Services\Notification\NotificationService;
 use Illuminate\Foundation\Inspiring;
@@ -61,18 +58,3 @@ Schedule::job(new Layer1RawCoinFetchJob)
     ->everyFiveMinutes()
     ->withoutOverlapping()
     ->when(fn (): bool => GeneralConfig::isCronEnabled());
-
-// Schedule::job(new CounterTrendJob)
-//     ->everyFifteenMinutes()
-//     ->withoutOverlapping()
-//     ->when(fn(): bool => GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('counter_trend'));
-
-// Schedule::job(new PrePumpJob)
-//     ->everyThirtyMinutes()
-//     ->withoutOverlapping()
-//     ->when(fn(): bool => GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('pre_pump'));
-
-// Schedule::job(new MomentumJob)
-//     ->hourly()
-//     ->withoutOverlapping()
-//     ->when(fn(): bool => GeneralConfig::isCronEnabled() && GeneralConfig::isModelEnabled('momentum'));
