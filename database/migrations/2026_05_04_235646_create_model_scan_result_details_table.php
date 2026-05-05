@@ -16,9 +16,10 @@ return new class extends Migration
             $table->foreignId('model_scan_result_id')->constrained('model_scan_results')->onDelete('cascade');
             $table->integer('rank');
             $table->foreignId('coin_id')->constrained('coins')->onDelete('cascade');
-            $table->float('price');
-            $table->float('stop_loss');
-            $table->float('score');
+            $table->boolean('is_passed');
+            $table->float('price')->nullable();
+            $table->float('stop_loss')->nullable();
+            $table->float('score')->nullable();
             $table->jsonb('data');
             $table->timestamps();
         });

@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Jobs\CounterTrendJob;
 use App\Jobs\Layer1RawCoinFetchJob;
 use App\Jobs\Layer2PreFilterCoinJob;
 use App\Models\GeneralConfig;
@@ -29,13 +30,13 @@ class RunAllCronJobsCommand extends Command
         try {
 
             // Layer 1: Shared Fetch (always runs first)
-            if (GeneralConfig::isCronEnabled()) {
-                $this->info('▶ Running Layer 1: Shared Fetch (Layer1RawCoinFetchJob)...');
-                Layer1RawCoinFetchJob::dispatchSync($executionId);
-                $this->line('  ✓ Layer 1: Shared Fetch completed');
-            } else {
-                $this->line('  ⊘ Layer 1: Shared Fetch skipped (cron disabled)');
-            }
+            // if (GeneralConfig::isCronEnabled()) {
+            //     $this->info('▶ Running Layer 1: Shared Fetch (Layer1RawCoinFetchJob)...');
+            //     Layer1RawCoinFetchJob::dispatchSync($executionId);
+            //     $this->line('  ✓ Layer 1: Shared Fetch completed');
+            // } else {
+            //     $this->line('  ⊘ Layer 1: Shared Fetch skipped (cron disabled)');
+            // }
 
             // Layer 2: Pre-Filter (always runs after Layer 1)
             // if (GeneralConfig::isCronEnabled()) {
@@ -45,6 +46,11 @@ class RunAllCronJobsCommand extends Command
             // } else {
             //     $this->line('  ⊘ Layer 2: Pre-Filter skipped (  cron disabled)');
             // }
+
+            // Model Run
+            $this->info('▶ Running CounterTrendJob (model run)...');
+            CounterTrendJob::dispatchSync($executionId);
+            $this->line('  ✓ CounterTrendJob completed');
 
             $this->newLine();
             $this->info('✅ All cron jobs completed successfully!');

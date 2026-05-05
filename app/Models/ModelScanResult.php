@@ -19,4 +19,10 @@ class ModelScanResult extends Model
         'result' => 'array',
         'supporting_data' => 'array',
     ];
+
+    // has many model scan result details (for supporting data)
+    public function details()
+    {
+        return $this->hasMany(ModelScanResultDetail::class, 'model_scan_result_id');
+    }
 }

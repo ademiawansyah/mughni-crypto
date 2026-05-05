@@ -23,6 +23,18 @@ class CounterTrendService
 
     private const ENTRY_LIMIT = 120;
 
+    private const SCORE_SWEEP = 40;
+
+    private const SCORE_MSS = 30;
+
+    private const SCORE_ENTRY_ZONE = 15;
+
+    private const SCORE_OI = 8;
+
+    private const SCORE_FUNDING = 7;
+
+    private const SCORE_MAX = 100;
+
     public function __construct(
         private readonly MarketRegimeService $marketRegimeService,
         private readonly ModelOutputStoreService $modelOutputStoreService,
@@ -57,6 +69,7 @@ class CounterTrendService
 
         $candidates = $this->filterCoins();
         $signals = [];
+        $failedCoins = [];
 
         foreach ($candidates as $coin) {
             $structureKlines = $this->fetchAndStoreOhlcv(
@@ -77,10 +90,16 @@ class CounterTrendService
                     'symbol' => $coin->symbol,
                 ]);
 
+                $failedCoins[] = [
+                    'id' => $coin->id,
+                    'symbol' => $coin->symbol,
+                    'reason' => 'missing_ohlcv',
+                ];
+
                 continue;
             }
 
-            $signal = $this->analyzeCoin(
+            $analysis = $this->analyzeCoin(
                 symbol: $coin->symbol,
                 structureKlines: $structureKlines,
                 entryKlines: $entryKlines,
@@ -88,20 +107,34 @@ class CounterTrendService
                 entryTimeframe: $entryTimeframe,
             );
 
-            if ($signal === null) {
+            if ($analysis['signal'] === null) {
+                $failedCoins[] = [
+                    'id' => $coin->id,
+                    'symbol' => $coin->symbol,
+                    'reason' => $analysis['rejection_reason'],
+                    'context' => $analysis['rejection_context'],
+                ];
+
+                Log::info('[CounterTrendService] Coin rejected by analysis', [
+                    'execution_id' => $resolvedExecutionId,
+                    'symbol' => $coin->symbol,
+                    'reason' => $analysis['rejection_reason'],
+                    'context' => $analysis['rejection_context'],
+                ]);
+
                 continue;
             }
 
-            $signals[] = $signal;
+            $signals[] = $analysis['signal'];
         }
 
         usort(
             $signals,
-            static fn(array $left, array $right): int => $right['total_score'] <=> $left['total_score'],
+            static fn (array $left, array $right): int => $right['total_score'] <=> $left['total_score'],
         );
 
         $ranked = array_values(array_map(
-            static fn(array $signal, int $index): array => array_merge($signal, ['rank' => $index + 1]),
+            static fn (array $signal, int $index): array => array_merge($signal, ['rank' => $index + 1]),
             array_slice($signals, 0, self::MAX_RESULTS),
             array_keys(array_slice($signals, 0, self::MAX_RESULTS)),
         ));
@@ -121,11 +154,13 @@ class CounterTrendService
             'execution_id' => $resolvedExecutionId,
             'evaluated' => $candidates->count(),
             'shortlisted' => count($ranked),
+            'failed_count' => count($failedCoins),
             'requested_timeframes' => [
                 'structure' => $structureTimeframe,
                 'entry' => $entryTimeframe,
             ],
             'all_scored_results' => $signals,
+            'failed_coins' => $failedCoins,
         ];
 
         $this->modelOutputStoreService->store(
@@ -201,7 +236,11 @@ class CounterTrendService
     /**
      * @param  array<int, array<int, mixed>>  $structureKlines
      * @param  array<int, array<int, mixed>>  $entryKlines
-     * @return array<string, mixed>|null
+     * @return array{
+     *   signal: array<string, mixed>|null,
+     *   rejection_reason: string|null,
+     *   rejection_context: array<string, mixed>
+     * }
      */
     private function analyzeCoin(
         string $symbol,
@@ -209,67 +248,112 @@ class CounterTrendService
         array $entryKlines,
         string $structureTimeframe,
         string $entryTimeframe,
-    ): ?array {
+    ): array {
         $structureCandles = $this->mapKlinesToCandles($structureKlines);
         $entryCandles = $this->mapKlinesToCandles($entryKlines);
 
-        if (count($structureCandles) < 30 || count($entryCandles) < 30) {
-            return null;
+        if (count($structureCandles) < 30) {
+            return [
+                'signal' => null,
+                'rejection_reason' => 'insufficient_structure_candles',
+                'rejection_context' => [
+                    'required' => 30,
+                    'actual' => count($structureCandles),
+                ],
+            ];
+        }
+
+        if (count($entryCandles) < 30) {
+            return [
+                'signal' => null,
+                'rejection_reason' => 'insufficient_entry_candles',
+                'rejection_context' => [
+                    'required' => 30,
+                    'actual' => count($entryCandles),
+                ],
+            ];
         }
 
         $sweep = $this->detectLiquiditySweep($structureCandles);
 
         if (! $sweep['confirmed']) {
-            return null;
+            return [
+                'signal' => null,
+                'rejection_reason' => 'sweep_not_confirmed',
+                'rejection_context' => [
+                    'direction' => $sweep['direction'],
+                ],
+            ];
         }
 
         $mss = $this->detectMarketStructureShift($entryCandles, $sweep['direction']);
 
+        Log::info('[CounterTrendService] Analyzing coin', [
+            'symbol' => $symbol,
+            'sweep_confirmed' => $sweep['confirmed'],
+            'sweep_direction' => $sweep['direction'],
+            'mss_confirmed' => $mss,
+        ]);
+
         if (! $mss) {
-            return null;
+            return [
+                'signal' => null,
+                'rejection_reason' => 'mss_not_confirmed',
+                'rejection_context' => [
+                    'direction' => $sweep['direction'],
+                ],
+            ];
         }
 
         $hasEntryZone = $this->hasEntryZoneFromFvgOrOrderBlock($entryCandles, $sweep['direction']);
 
-        $sweepScore = 40;
-        $mssScore = 30;
-        $entryZoneScore = $hasEntryZone ? 15 : 0;
+        $sweepScore = self::SCORE_SWEEP;
+        $mssScore = self::SCORE_MSS;
+        $entryZoneScore = $hasEntryZone ? self::SCORE_ENTRY_ZONE : 0;
         $oiScore = 0;
         $fundingScore = 0;
-        $totalScore = $sweepScore + $mssScore + $entryZoneScore + $oiScore + $fundingScore;
+        $totalScoreRaw = $sweepScore + $mssScore + $entryZoneScore + $oiScore + $fundingScore;
+        $totalScoreNormalized = (int) round(($totalScoreRaw / self::SCORE_MAX) * 100);
 
         $lastCandle = $entryCandles[array_key_last($entryCandles)];
         $currentPrice = (float) $lastCandle['close'];
 
         return [
-            'symbol' => strtoupper($symbol) . 'USDT',
-            'price' => round($currentPrice, 8),
-            'total_score' => $totalScore,
-            'components' => [
-                'liquidity_sweep' => $sweep['confirmed'],
-                'mss' => $mss,
-                'fvg_or_ob' => $hasEntryZone,
-                'oi_decline' => false,
-                'funding_extreme' => false,
-                'score_breakdown' => [
-                    'sweep' => $sweepScore,
-                    'mss' => $mssScore,
-                    'fvg_or_ob' => $entryZoneScore,
-                    'oi' => $oiScore,
-                    'funding' => $fundingScore,
+            'signal' => [
+                'symbol' => strtoupper($symbol).'USDT',
+                'price' => round($currentPrice, 8),
+                'total_score' => $totalScoreNormalized,
+                'components' => [
+                    'liquidity_sweep' => $sweep['confirmed'],
+                    'mss' => $mss,
+                    'fvg_or_ob' => $hasEntryZone,
+                    'oi_decline' => false,
+                    'funding_extreme' => false,
+                    'score_breakdown' => [
+                        'sweep' => $sweepScore,
+                        'mss' => $mssScore,
+                        'fvg_or_ob' => $entryZoneScore,
+                        'oi' => $oiScore,
+                        'funding' => $fundingScore,
+                        'total_raw' => $totalScoreRaw,
+                        'total_normalized' => $totalScoreNormalized,
+                        'max_score' => self::SCORE_MAX,
+                    ],
+                ],
+                'metadata' => [
+                    'strategy' => 'counter_trend',
+                    'direction' => $sweep['direction'],
+                    'entry_timeframe' => strtoupper($entryTimeframe),
+                    'structure_timeframe' => strtoupper($structureTimeframe),
+                    'reason' => sprintf(
+                        'Sweep %s + MSS confirmed%s',
+                        $sweep['direction'],
+                        $hasEntryZone ? ' + entry zone' : ''
+                    ),
                 ],
             ],
-            'metadata' => [
-                'strategy' => 'counter_trend',
-                'direction' => $sweep['direction'],
-                'entry_timeframe' => strtoupper($entryTimeframe),
-                'structure_timeframe' => strtoupper($structureTimeframe),
-                'reason' => sprintf(
-                    'Sweep %s + MSS confirmed%s',
-                    $sweep['direction'],
-                    $hasEntryZone ? ' + entry zone' : ''
-                ),
-            ],
+            'rejection_reason' => null,
+            'rejection_context' => [],
         ];
     }
 

@@ -45,7 +45,7 @@ class CounterTrendServiceTest extends TestCase
         $result = $service->execute('exec-counter-trend-test');
 
         $this->assertSame('counter_trend', $result['model']);
-        $this->assertSame('2026-05-04', $result['execution_date']);
+        $this->assertSame(now()->toDateString(), $result['execution_date']);
         $this->assertCount(1, $result['results']);
 
         $stored = ModelScanResult::query()

@@ -4,10 +4,11 @@ namespace App\Services\Market;
 
 use App\Models\Coin;
 use App\Services\External\BinanceService;
+use Illuminate\Support\Facades\Log;
 
 class MarketRegimeService
 {
-    private const CACHE_TTL_SECONDS = 300; // 5 minutes
+    private const CACHE_TTL_SECONDS = 900; // 10 minutes
 
     /**
      * Get OHLCV data for a given coin and timeframe.
@@ -23,6 +24,8 @@ class MarketRegimeService
         $cacheKey = "ohlcv_{$symbol}_{$interval}_{$limit}";
         $cachedData = cache()->get($cacheKey);
         if ($cachedData) {
+            Log::info("[MarketRegimeService] Returning cached OHLCV data for {$symbol} at interval {$interval}");
+
             return $cachedData;
         }
 

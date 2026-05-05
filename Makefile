@@ -39,6 +39,9 @@ migrate-force:
 migrate-refresh:
 	docker exec -it al_mughni php artisan migrate:refresh
 
+migrate-rollback:
+	docker exec -it al_mughni php artisan migrate:rollback
+
 seed:
 	docker exec -it al_mughni php artisan db:seed --force
 
