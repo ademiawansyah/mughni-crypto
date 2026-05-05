@@ -77,7 +77,7 @@ class CronSettingsPage extends Page implements HasForms
                             ->onColor('success'),
 
                         Toggle::make('pre_pump_enabled')
-                            ->label('Pre-Pump model (every 30 min)')
+                            ->label('Pre-Pump model (every 4 hours)')
                             ->onColor('success'),
 
                         Toggle::make('momentum_enabled')

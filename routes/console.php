@@ -1,6 +1,7 @@
 <?php
 
 use App\Jobs\Layer1RawCoinFetchJob;
+use App\Jobs\PrePumpJob;
 use App\Models\GeneralConfig;
 use App\Services\Notification\NotificationService;
 use Illuminate\Foundation\Inspiring;
@@ -58,3 +59,15 @@ Schedule::job(new Layer1RawCoinFetchJob)
     ->everyFiveMinutes()
     ->withoutOverlapping()
     ->when(fn (): bool => GeneralConfig::isCronEnabled());
+
+/**
+ * ============================================================================
+ * MODEL 2: PRE-PUMP (Every 4 hours)
+ * ============================================================================
+ * Runs independent Model 2 scanning pipeline using cached/shared market data.
+ */
+Schedule::job(new PrePumpJob)
+    ->cron((string) config('models.pre_pump.job_schedule', '0 */4 * * *'))
+    ->withoutOverlapping()
+    ->when(fn (): bool => GeneralConfig::isCronEnabled())
+    ->when(fn (): bool => GeneralConfig::isModelEnabled('pre_pump'));

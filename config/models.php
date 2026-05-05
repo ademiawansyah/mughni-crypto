@@ -89,8 +89,8 @@ return [
         'ai_enabled' => true,  // Enable per-model AI refinement
         'notification_threshold' => 75,  // Confidence threshold for notifications
 
-        // Job schedule: every 30 minutes
-        'job_schedule' => '*/30 * * * *',
+        // Job schedule: every 4 hours
+        'job_schedule' => '0 */4 * * *',
     ],
 
     /**
