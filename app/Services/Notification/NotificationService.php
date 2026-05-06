@@ -3,6 +3,7 @@
 namespace App\Services\Notification;
 
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Telegram\Bot\Laravel\Facades\Telegram;
 use Throwable;
 
@@ -19,6 +20,97 @@ use Throwable;
  */
 class NotificationService
 {
+    /**
+     * Send model execution notifications:
+     * - One summary message per model execution
+     * - One message per passed/shortlisted coin
+     *
+     * @param  array{
+     *   execution_id: string,
+     *   model: string,
+     *   evaluated: int,
+     *   shortlisted: int,
+     *   results: array<int, array<string, mixed>>,
+     * }  $payload
+     */
+    public function sendModelExecutionResult(array $payload): void
+    {
+        $executionId = (string) $payload['execution_id'];
+        $model = (string) $payload['model'];
+        $evaluated = (int) $payload['evaluated'];
+        $shortlisted = (int) $payload['shortlisted'];
+        $results = is_array($payload['results'] ?? null) ? $payload['results'] : [];
+        $modelDisplayName = $this->formatModelName($model);
+
+        if ($results === [] || $shortlisted === 0) {
+            $this->sendSystemMessage([
+                'execution_id' => $executionId,
+                'title' => sprintf('%s - No Setup', $modelDisplayName),
+                'lines' => [
+                    sprintf('Model: %s', $modelDisplayName),
+                    sprintf('Evaluated: %d', $evaluated),
+                    'Passed: 0',
+                    'Result: No coin passed model criteria.',
+                ],
+            ]);
+
+            return;
+        }
+
+        $top = $results[0] ?? [];
+        $topSymbol = (string) ($top['symbol'] ?? '-');
+        $topScore = is_numeric($top['total_score'] ?? null)
+            ? (string) $top['total_score']
+            : '-';
+
+        $this->sendSystemMessage([
+            'execution_id' => $executionId,
+            'title' => sprintf('%s - Execution Summary', $modelDisplayName),
+            'lines' => [
+                sprintf('Model: %s', $modelDisplayName),
+                sprintf('Evaluated: %d', $evaluated),
+                sprintf('Passed: %d', $shortlisted),
+                sprintf('Top: %s', $topSymbol),
+                sprintf('Top score: %s', $topScore),
+            ],
+        ]);
+
+        foreach ($results as $index => $result) {
+            $symbol = (string) ($result['symbol'] ?? '-');
+            $rank = (int) ($result['rank'] ?? ($index + 1));
+            $score = is_numeric($result['total_score'] ?? null)
+                ? (string) $result['total_score']
+                : '-';
+            $price = $this->formatDecimal($result['price'] ?? null) ?? '-';
+
+            $metadata = is_array($result['metadata'] ?? null) ? $result['metadata'] : [];
+            $entryTimeframe = (string) ($metadata['entry_timeframe'] ?? '-');
+            $structureTimeframe = (string) ($metadata['structure_timeframe'] ?? '-');
+            $reason = (string) (
+                $metadata['reason']
+                ?? $metadata['strategy']
+                ?? 'Passed model criteria.'
+            );
+
+            $lines = [
+                sprintf('Model: %s', $modelDisplayName),
+                sprintf('Rank: #%d', $rank),
+                sprintf('Symbol: %s', $symbol),
+                sprintf('Score: %s', $score),
+                sprintf('Price: %s', $price),
+                sprintf('Entry TF: %s', $entryTimeframe),
+                sprintf('Structure TF: %s', $structureTimeframe),
+                sprintf('Reason: %s', $reason),
+            ];
+
+            $this->sendSystemMessage([
+                'execution_id' => $executionId,
+                'title' => sprintf('%s - Passed Coin', $modelDisplayName),
+                'lines' => $lines,
+            ]);
+        }
+    }
+
     /**
      * Send a generic system notification message.
      *
@@ -205,5 +297,12 @@ class NotificationService
     private function escapeForHtml(string $value): string
     {
         return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    }
+
+    private function formatModelName(string $value): string
+    {
+        return (string) Str::of($value)
+            ->replace('_', ' ')
+            ->title();
     }
 }

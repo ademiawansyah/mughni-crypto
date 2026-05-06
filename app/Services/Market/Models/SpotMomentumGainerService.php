@@ -172,7 +172,13 @@ class SpotMomentumGainerService
             supportingData: $supportingData,
         );
 
-        $this->dispatchDailyNotification($resolvedExecutionId, $ranked, $supportingData['evaluated']);
+        $this->notificationService->sendModelExecutionResult([
+            'execution_id' => $resolvedExecutionId,
+            'model' => self::MODEL_NAME,
+            'evaluated' => $supportingData['evaluated'],
+            'shortlisted' => $supportingData['shortlisted'],
+            'results' => $ranked,
+        ]);
 
         $result = array_merge($standardOutput, [
             'execution_id' => $resolvedExecutionId,
@@ -464,39 +470,5 @@ class SpotMomentumGainerService
                 'volume' => (float) ($kline[5] ?? 0),
             ];
         }, $klines));
-    }
-
-    /**
-     * @param  array<int, array<string, mixed>>  $rankedSignals
-     */
-    private function dispatchDailyNotification(string $executionId, array $rankedSignals, int $evaluated): void
-    {
-        if ($rankedSignals === []) {
-            $this->notificationService->sendSystemMessage([
-                'execution_id' => $executionId,
-                'title' => 'Spot Momentum Gainer - No Setup Today',
-                'lines' => [
-                    sprintf('Model: %s', self::MODEL_NAME),
-                    sprintf('Evaluated: %d', $evaluated),
-                    'Result: No coin passed all bullish gate criteria.',
-                ],
-            ]);
-
-            return;
-        }
-
-        $top = $rankedSignals[0];
-
-        $this->notificationService->sendSystemMessage([
-            'execution_id' => $executionId,
-            'title' => 'Spot Momentum Gainer - Setup Found',
-            'lines' => [
-                sprintf('Model: %s', self::MODEL_NAME),
-                sprintf('Evaluated: %d', $evaluated),
-                sprintf('Shortlisted: %d', count($rankedSignals)),
-                sprintf('Top: %s', (string) ($top['symbol'] ?? '-')),
-                sprintf('Top score: %s', (string) ($top['total_score'] ?? '-')),
-            ],
-        ]);
     }
 }

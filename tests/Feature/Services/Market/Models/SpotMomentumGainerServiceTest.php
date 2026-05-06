@@ -59,7 +59,7 @@ class SpotMomentumGainerServiceTest extends TestCase
 
         $notificationService = $this->createMock(NotificationService::class);
         $notificationService->expects($this->once())
-            ->method('sendSystemMessage');
+            ->method('sendModelExecutionResult');
 
         $service = new SpotMomentumGainerService(
             $coinMarketCapService,
@@ -136,7 +136,7 @@ class SpotMomentumGainerServiceTest extends TestCase
 
         $notificationService = $this->createMock(NotificationService::class);
         $notificationService->expects($this->once())
-            ->method('sendSystemMessage');
+            ->method('sendModelExecutionResult');
 
         $service = new SpotMomentumGainerService(
             $coinMarketCapService,

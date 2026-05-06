@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Log;
 
 class MarketRegimeService
 {
-    private const OHLCV_CACHE_TTL_SECONDS = 900;
+    private const OHLCV_CACHE_TTL_SECONDS = 300; // 5 minutes
 
     private const FUTURES_CACHE_TTL_SECONDS = 120;
 

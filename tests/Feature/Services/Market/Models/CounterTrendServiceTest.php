@@ -6,6 +6,7 @@ use App\Models\Coin;
 use App\Models\ModelScanResult;
 use App\Services\Market\MarketRegimeService;
 use App\Services\Market\Models\CounterTrendService;
+use App\Services\Notification\NotificationService;
 use App\Services\Trading\ModelOutputStoreService;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Tests\TestCase;
@@ -39,9 +40,14 @@ class CounterTrendServiceTest extends TestCase
         $marketRegimeService->method('getOpenInterestHistoryForCoin')->willReturn(null);
         $marketRegimeService->method('getLatestFundingRateForCoin')->willReturn(null);
 
+        $notificationService = $this->createMock(NotificationService::class);
+        $notificationService->expects($this->once())
+            ->method('sendModelExecutionResult');
+
         $service = new CounterTrendService(
             $marketRegimeService,
             new ModelOutputStoreService,
+            $notificationService,
         );
 
         $result = $service->execute('exec-counter-trend-test');

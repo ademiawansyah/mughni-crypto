@@ -6,6 +6,7 @@ use App\Models\Coin;
 use App\Models\ModelScanResult;
 use App\Services\Market\MarketRegimeService;
 use App\Services\Market\Models\TrendMomentumService;
+use App\Services\Notification\NotificationService;
 use App\Services\Trading\ModelOutputStoreService;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Tests\TestCase;
@@ -49,9 +50,14 @@ class TrendMomentumServiceTest extends TestCase
                 'cvd_slope' => 10.0,
             ]);
 
+        $notificationService = $this->createMock(NotificationService::class);
+        $notificationService->expects($this->once())
+            ->method('sendModelExecutionResult');
+
         $service = new TrendMomentumService(
             $marketRegimeService,
             new ModelOutputStoreService,
+            $notificationService,
         );
 
         $result = $service->execute('exec-trend-momentum-service-test');

@@ -4,6 +4,7 @@ namespace App\Services\Market\Models;
 
 use App\Models\Coin;
 use App\Services\Market\MarketRegimeService;
+use App\Services\Notification\NotificationService;
 use App\Services\Trading\ModelOutputStoreService;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -25,6 +26,7 @@ class TrendMomentumService
     public function __construct(
         private readonly MarketRegimeService $marketRegimeService,
         private readonly ModelOutputStoreService $modelOutputStoreService,
+        private readonly NotificationService $notificationService,
     ) {}
 
     /**
@@ -92,13 +94,13 @@ class TrendMomentumService
 
         usort(
             $signals,
-            static fn (array $left, array $right): int => $right['total_score'] <=> $left['total_score'],
+            static fn(array $left, array $right): int => $right['total_score'] <=> $left['total_score'],
         );
 
         $limitedSignals = array_slice($signals, 0, self::MAX_RESULTS);
 
         $ranked = array_values(array_map(
-            static fn (array $signal, int $index): array => array_merge($signal, ['rank' => $index + 1]),
+            static fn(array $signal, int $index): array => array_merge($signal, ['rank' => $index + 1]),
             $limitedSignals,
             array_keys($limitedSignals),
         ));
@@ -136,6 +138,14 @@ class TrendMomentumService
             'execution_id' => $resolvedExecutionId,
             'evaluated' => $supportingData['evaluated'],
             'shortlisted' => $supportingData['shortlisted'],
+        ]);
+
+        $this->notificationService->sendModelExecutionResult([
+            'execution_id' => $resolvedExecutionId,
+            'model' => self::MODEL_NAME,
+            'evaluated' => $supportingData['evaluated'],
+            'shortlisted' => $supportingData['shortlisted'],
+            'results' => $ranked,
         ]);
 
         Log::info('[TrendMomentumService] Completed execution', [
@@ -235,7 +245,7 @@ class TrendMomentumService
             ];
         }
 
-        $futuresSymbol = strtoupper($coin->symbol).'USDT';
+        $futuresSymbol = strtoupper($coin->symbol) . 'USDT';
 
         $macd = $this->scoreMacd($entryCandles);
         $rsi = $this->scoreRsi($entryCandles);
@@ -276,7 +286,7 @@ class TrendMomentumService
 
         return [
             'signal' => [
-                'symbol' => strtoupper((string) $coin->symbol).'USDT',
+                'symbol' => strtoupper((string) $coin->symbol) . 'USDT',
                 'price' => $latestPrice,
                 'total_score' => round($totalScore, 2),
                 'components' => [
@@ -328,7 +338,7 @@ class TrendMomentumService
      */
     private function scoreEmaTrend(array $candles): array
     {
-        $closes = array_values(array_map(static fn (array $candle): float => $candle['close'], $candles));
+        $closes = array_values(array_map(static fn(array $candle): float => $candle['close'], $candles));
         $ema50Series = $this->calculateEmaSeries($closes, 50);
         $ema200Series = $this->calculateEmaSeries($closes, 200);
 
@@ -363,7 +373,7 @@ class TrendMomentumService
      */
     private function scoreMacd(array $candles): array
     {
-        $closes = array_values(array_map(static fn (array $candle): float => $candle['close'], $candles));
+        $closes = array_values(array_map(static fn(array $candle): float => $candle['close'], $candles));
         $ema12 = $this->calculateEmaSeries($closes, 12);
         $ema26 = $this->calculateEmaSeries($closes, 26);
 
@@ -401,7 +411,7 @@ class TrendMomentumService
      */
     private function scoreRsi(array $candles): array
     {
-        $closes = array_values(array_map(static fn (array $candle): float => $candle['close'], $candles));
+        $closes = array_values(array_map(static fn(array $candle): float => $candle['close'], $candles));
         $rsi = $this->calculateRsi($closes, 14);
 
         $score = match (true) {
@@ -428,7 +438,7 @@ class TrendMomentumService
 
         $latestClose = $candles[count($candles) - 1]['close'];
         $recentHighs = array_map(
-            static fn (array $candle): float => $candle['high'],
+            static fn(array $candle): float => $candle['high'],
             array_slice($candles, -21, 20),
         );
         $previousSwingHigh = max($recentHighs);

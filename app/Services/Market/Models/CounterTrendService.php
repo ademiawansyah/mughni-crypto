@@ -4,6 +4,7 @@ namespace App\Services\Market\Models;
 
 use App\Models\Coin;
 use App\Services\Market\MarketRegimeService;
+use App\Services\Notification\NotificationService;
 use App\Services\Trading\ModelOutputStoreService;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -37,6 +38,7 @@ class CounterTrendService
     public function __construct(
         private readonly MarketRegimeService $marketRegimeService,
         private readonly ModelOutputStoreService $modelOutputStoreService,
+        private readonly NotificationService $notificationService,
     ) {}
 
     /**
@@ -129,11 +131,11 @@ class CounterTrendService
 
         usort(
             $signals,
-            static fn (array $left, array $right): int => $right['total_score'] <=> $left['total_score'],
+            static fn(array $left, array $right): int => $right['total_score'] <=> $left['total_score'],
         );
 
         $ranked = array_values(array_map(
-            static fn (array $signal, int $index): array => array_merge($signal, ['rank' => $index + 1]),
+            static fn(array $signal, int $index): array => array_merge($signal, ['rank' => $index + 1]),
             array_slice($signals, 0, self::MAX_RESULTS),
             array_keys(array_slice($signals, 0, self::MAX_RESULTS)),
         ));
@@ -174,6 +176,14 @@ class CounterTrendService
             'execution_id' => $resolvedExecutionId,
             'evaluated' => $supportingData['evaluated'],
             'shortlisted' => $supportingData['shortlisted'],
+        ]);
+
+        $this->notificationService->sendModelExecutionResult([
+            'execution_id' => $resolvedExecutionId,
+            'model' => self::MODEL_NAME,
+            'evaluated' => $supportingData['evaluated'],
+            'shortlisted' => $supportingData['shortlisted'],
+            'results' => $ranked,
         ]);
 
         Log::info('[CounterTrendService] Completed execution', [
@@ -290,7 +300,7 @@ class CounterTrendService
 
         $hasEntryZone = $this->hasEntryZoneFromFvgOrOrderBlock($entryCandles, $sweep['direction']);
 
-        $futuresSymbol = strtoupper($symbol).'USDT';
+        $futuresSymbol = strtoupper($symbol) . 'USDT';
         $oiDecline = $this->detectOiDecline($futuresSymbol);
         $fundingExtreme = $this->detectExtremeFundingRate($futuresSymbol);
 

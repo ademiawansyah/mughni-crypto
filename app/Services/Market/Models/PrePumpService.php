@@ -5,6 +5,7 @@ namespace App\Services\Market\Models;
 use App\Models\Coin;
 use App\Models\CoinMarketData;
 use App\Services\Market\MarketRegimeService;
+use App\Services\Notification\NotificationService;
 use App\Services\Trading\ModelOutputStoreService;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -42,6 +43,7 @@ class PrePumpService
     public function __construct(
         private readonly MarketRegimeService $marketRegimeService,
         private readonly ModelOutputStoreService $modelOutputStoreService,
+        private readonly NotificationService $notificationService,
     ) {}
 
     /**
@@ -125,13 +127,13 @@ class PrePumpService
 
         usort(
             $signals,
-            static fn (array $left, array $right): int => $right['total_score'] <=> $left['total_score'],
+            static fn(array $left, array $right): int => $right['total_score'] <=> $left['total_score'],
         );
 
         $limitedSignals = array_slice($signals, 0, self::MAX_RESULTS);
 
         $ranked = array_values(array_map(
-            static fn (array $signal, int $index): array => array_merge($signal, ['rank' => $index + 1]),
+            static fn(array $signal, int $index): array => array_merge($signal, ['rank' => $index + 1]),
             $limitedSignals,
             array_keys($limitedSignals),
         ));
@@ -169,6 +171,14 @@ class PrePumpService
             'execution_id' => $resolvedExecutionId,
             'evaluated' => $supportingData['evaluated'],
             'shortlisted' => $supportingData['shortlisted'],
+        ]);
+
+        $this->notificationService->sendModelExecutionResult([
+            'execution_id' => $resolvedExecutionId,
+            'model' => self::MODEL_NAME,
+            'evaluated' => $supportingData['evaluated'],
+            'shortlisted' => $supportingData['shortlisted'],
+            'results' => $ranked,
         ]);
 
         Log::info('[PrePumpService] Completed execution', [
@@ -268,10 +278,10 @@ class PrePumpService
 
         $totalScore = round(
             ($fundingScore * $weights['funding'])
-            + ($atrCompressionScore * $weights['atr_compression'])
-            + ($oiScore * $weights['oi'])
-            + ($rsScore * $weights['rs'])
-            + ($cvdScore * $weights['cvd']),
+                + ($atrCompressionScore * $weights['atr_compression'])
+                + ($oiScore * $weights['oi'])
+                + ($rsScore * $weights['rs'])
+                + ($cvdScore * $weights['cvd']),
             2,
         );
 
@@ -298,7 +308,7 @@ class PrePumpService
         $currentPrice = (float) $lastCandle['close'];
 
         $symbol = strtoupper($coin->symbol);
-        $pairSymbol = str_ends_with($symbol, 'USDT') ? $symbol : $symbol.'USDT';
+        $pairSymbol = str_ends_with($symbol, 'USDT') ? $symbol : $symbol . 'USDT';
 
         return [
             'signal' => [
