@@ -20,6 +20,34 @@ use Throwable;
 class NotificationService
 {
     /**
+     * Send a generic system notification message.
+     *
+     * @param  array{
+     *   execution_id?: string,
+     *   title: string,
+     *   lines?: array<int, string>
+     * }  $payload
+     */
+    public function sendSystemMessage(array $payload): void
+    {
+        $title = (string) ($payload['title'] ?? 'System Notification');
+        $lines = is_array($payload['lines'] ?? null) ? $payload['lines'] : [];
+
+        Log::info('[NotificationService] System notification triggered', [
+            'execution_id' => $payload['execution_id'] ?? null,
+            'title' => $title,
+            'lines' => $lines,
+        ]);
+
+        $message = $this->buildSystemMessage($title, $lines, $payload['execution_id'] ?? null);
+
+        $this->sendTelegramMessage(
+            message: $message,
+            executionId: $payload['execution_id'] ?? null,
+        );
+    }
+
+    /**
      * Send a trade signal notification for a strong BUY or SELL decision.
      *
      * Expects a decision array with keys: coin, timeframe, action, confidence,
@@ -97,6 +125,26 @@ class NotificationService
             sprintf('Reason: %s', $this->escapeForHtml((string) $payload['reason'])),
             sprintf('Execution ID: <code>%s</code>', $this->escapeForHtml((string) $executionId)),
         ]);
+    }
+
+    /**
+     * @param  array<int, string>  $lines
+     */
+    private function buildSystemMessage(string $title, array $lines, ?string $executionId): string
+    {
+        $messageLines = [
+            sprintf('<b>%s</b>', $this->escapeForHtml($title)),
+        ];
+
+        foreach ($lines as $line) {
+            $messageLines[] = $this->escapeForHtml((string) $line);
+        }
+
+        if ($executionId !== null && $executionId !== '') {
+            $messageLines[] = sprintf('Execution ID: <code>%s</code>', $this->escapeForHtml($executionId));
+        }
+
+        return implode(PHP_EOL, $messageLines);
     }
 
     /**

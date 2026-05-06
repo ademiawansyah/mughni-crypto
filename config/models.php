@@ -135,6 +135,33 @@ return [
     ],
 
     /**
+     * Spot Momentum Gainer Model Configuration
+     *
+     * Model 4 scans top daily gainers for strong 1D bullish continuation
+     * candles and ranks spot-only opportunities.
+     */
+    'spot_momentum_gainer' => [
+        // Scoring component weights (must sum to 1.0)
+        'scoring' => [
+            'change_24h' => 0.40,
+            'volume_ratio' => 0.35,
+            'body_ratio' => 0.25,
+        ],
+
+        // Threshold for signal acceptance (0-100)
+        'min_score' => 60,
+
+        // AI is advisory-only and not used by this deterministic spot model
+        'ai_enabled' => false,
+
+        // Notification threshold (kept for consistency with other model configs)
+        'notification_threshold' => 60,
+
+        // Job schedule: daily at 07:00 WIB (Asia/Jakarta)
+        'job_schedule' => '0 7 * * *',
+    ],
+
+    /**
      * Global Market Regime Detection Configuration
      *
      * Settings for MarketRegimeService which analyzes BTC across

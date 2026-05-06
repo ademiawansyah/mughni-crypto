@@ -61,6 +61,12 @@ return [
         'vs_currency' => env('COINGECKO_VS_CURRENCY', 'usd'),
     ],
 
+    'coinmarketcap' => [
+        'base_url' => env('COINMARKETCAP_BASE_URL', 'https://pro-api.coinmarketcap.com'),
+        'api_key' => env('COINMARKETCAP_API_KEY'),
+        'timeout' => (int) env('COINMARKETCAP_TIMEOUT', 10),
+    ],
+
     'binance' => [
         'base_url' => env('BINANCE_BASE_URL', 'https://fapi.binance.com/fapi/v1'),
         'api_key' => env('BINANCE_API_KEY'),

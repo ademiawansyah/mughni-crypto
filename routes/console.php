@@ -2,6 +2,7 @@
 
 use App\Jobs\Layer1RawCoinFetchJob;
 use App\Jobs\PrePumpJob;
+use App\Jobs\SpotMomentumGainerJob;
 use App\Models\GeneralConfig;
 use App\Services\Notification\NotificationService;
 use Illuminate\Foundation\Inspiring;
@@ -58,7 +59,7 @@ Artisan::command('notification:test-telegram {--chat_id=} {--bot=} {--action=BUY
 Schedule::job(new Layer1RawCoinFetchJob)
     ->everyFiveMinutes()
     ->withoutOverlapping()
-    ->when(fn (): bool => GeneralConfig::isCronEnabled());
+    ->when(fn(): bool => GeneralConfig::isCronEnabled());
 
 /**
  * ============================================================================
@@ -69,5 +70,19 @@ Schedule::job(new Layer1RawCoinFetchJob)
 Schedule::job(new PrePumpJob)
     ->cron((string) config('models.pre_pump.job_schedule', '0 */4 * * *'))
     ->withoutOverlapping()
-    ->when(fn (): bool => GeneralConfig::isCronEnabled())
-    ->when(fn (): bool => GeneralConfig::isModelEnabled('pre_pump'));
+    ->when(fn(): bool => GeneralConfig::isCronEnabled())
+    ->when(fn(): bool => GeneralConfig::isModelEnabled('pre_pump'));
+
+/**
+ * ============================================================================
+ * MODEL 4: SPOT MOMENTUM GAINER (Daily at 07:00 WIB)
+ * ============================================================================
+ * Runs independent Model 4 scanning pipeline using CMC primary source,
+ * CoinGecko fallback, and 1D bullish-candle gate validation.
+ */
+Schedule::job(new SpotMomentumGainerJob)
+    ->cron((string) config('models.spot_momentum_gainer.job_schedule', '0 7 * * *'))
+    ->timezone('Asia/Jakarta')
+    ->withoutOverlapping()
+    ->when(fn(): bool => GeneralConfig::isCronEnabled())
+    ->when(fn(): bool => GeneralConfig::isModelEnabled('spot_momentum_gainer'));
