@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class ModelScanResultDetail extends Model
 {
@@ -26,8 +27,14 @@ class ModelScanResultDetail extends Model
     ];
 
     // belongs to model scan result
-    public function modelScanResult()
+    public function modelScanResult(): BelongsTo
     {
         return $this->belongsTo(ModelScanResult::class, 'model_scan_result_id');
+    }
+
+    // belongs to coin for symbol/name details
+    public function coin(): BelongsTo
+    {
+        return $this->belongsTo(Coin::class, 'coin_id');
     }
 }

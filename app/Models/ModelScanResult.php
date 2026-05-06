@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class ModelScanResult extends Model
 {
@@ -21,7 +22,7 @@ class ModelScanResult extends Model
     ];
 
     // has many model scan result details (for supporting data)
-    public function details()
+    public function details(): HasMany
     {
         return $this->hasMany(ModelScanResultDetail::class, 'model_scan_result_id');
     }
