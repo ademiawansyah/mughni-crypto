@@ -281,13 +281,6 @@ class CounterTrendService
 
         $mss = $this->detectMarketStructureShift($entryCandles, $sweep['direction']);
 
-        Log::info('[CounterTrendService] Analyzing coin', [
-            'symbol' => $symbol,
-            'sweep_confirmed' => $sweep['confirmed'],
-            'sweep_direction' => $sweep['direction'],
-            'mss_confirmed' => $mss,
-        ]);
-
         if (! $mss) {
             return [
                 'signal' => null,
