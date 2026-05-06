@@ -4,6 +4,7 @@ namespace Tests\Feature\Services\Market\Models;
 
 use App\Models\Coin;
 use App\Models\ModelScanResult;
+use App\Services\External\BinanceFuturesService;
 use App\Services\Market\MarketRegimeService;
 use App\Services\Market\Models\CounterTrendService;
 use App\Services\Trading\ModelOutputStoreService;
@@ -37,9 +38,14 @@ class CounterTrendServiceTest extends TestCase
                 $this->entryKlines(),
             );
 
+        $binanceFuturesService = $this->createMock(BinanceFuturesService::class);
+        $binanceFuturesService->method('fetchOpenInterestHistory')->willReturn(null);
+        $binanceFuturesService->method('fetchLatestFundingRate')->willReturn(null);
+
         $service = new CounterTrendService(
             $marketRegimeService,
             new ModelOutputStoreService,
+            $binanceFuturesService,
         );
 
         $result = $service->execute('exec-counter-trend-test');

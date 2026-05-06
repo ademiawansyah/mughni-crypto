@@ -26,20 +26,20 @@ class BinanceService
 
     public function getOhlcvDataForCoin(string $symbol, string $interval, int $limit = 20): array
     {
-        $endpoint = '/api/v3/klines';
+        $endpoint = '/klines';
         $parameters = [
-            'symbol' => strtoupper($symbol).'USDT',
+            'symbol' => strtoupper($symbol) . 'USDT',
             'interval' => $interval,
             'limit' => $limit,
         ];
 
         try {
-            Log::info('[BinanceService] Sending request to /api/v3/klines', [
+            Log::info('[BinanceService] Sending request to /klines', [
                 'parameters' => $parameters,
             ]);
             $response = Http::timeout($this->timeout)->baseUrl($this->baseUrl)->get($endpoint, $parameters);
         } catch (ConnectionException $e) {
-            Log::error('[BinanceService] Connection failed on /api/v3/klines', [
+            Log::error('[BinanceService] Connection failed on /klines', [
                 'parameters' => $parameters,
                 'exception' => $e->getMessage(),
             ]);
@@ -48,7 +48,7 @@ class BinanceService
         }
 
         if ($response->failed()) {
-            Log::error('[BinanceService] HTTP request failed on /api/v3/klines', [
+            Log::error('[BinanceService] HTTP request failed on /klines', [
                 'status' => $response->status(),
                 'error' => $response->body(),
                 'parameters' => $parameters,

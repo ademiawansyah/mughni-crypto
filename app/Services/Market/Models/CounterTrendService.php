@@ -4,6 +4,7 @@ namespace App\Services\Market\Models;
 
 use App\Models\Coin;
 use App\Models\CoinMarketData;
+use App\Services\External\BinanceFuturesService;
 use App\Services\Market\MarketRegimeService;
 use App\Services\Trading\ModelOutputStoreService;
 use Illuminate\Support\Facades\Log;
@@ -38,6 +39,7 @@ class CounterTrendService
     public function __construct(
         private readonly MarketRegimeService $marketRegimeService,
         private readonly ModelOutputStoreService $modelOutputStoreService,
+        private readonly BinanceFuturesService $binanceFuturesService,
     ) {}
 
     /**
@@ -130,11 +132,11 @@ class CounterTrendService
 
         usort(
             $signals,
-            static fn (array $left, array $right): int => $right['total_score'] <=> $left['total_score'],
+            static fn(array $left, array $right): int => $right['total_score'] <=> $left['total_score'],
         );
 
         $ranked = array_values(array_map(
-            static fn (array $signal, int $index): array => array_merge($signal, ['rank' => $index + 1]),
+            static fn(array $signal, int $index): array => array_merge($signal, ['rank' => $index + 1]),
             array_slice($signals, 0, self::MAX_RESULTS),
             array_keys(array_slice($signals, 0, self::MAX_RESULTS)),
         ));
@@ -307,11 +309,15 @@ class CounterTrendService
 
         $hasEntryZone = $this->hasEntryZoneFromFvgOrOrderBlock($entryCandles, $sweep['direction']);
 
+        $futuresSymbol = strtoupper($symbol) . 'USDT';
+        $oiDecline = $this->detectOiDecline($futuresSymbol);
+        $fundingExtreme = $this->detectExtremeFundingRate($futuresSymbol);
+
         $sweepScore = self::SCORE_SWEEP;
         $mssScore = self::SCORE_MSS;
         $entryZoneScore = $hasEntryZone ? self::SCORE_ENTRY_ZONE : 0;
-        $oiScore = 0;
-        $fundingScore = 0;
+        $oiScore = $oiDecline ? self::SCORE_OI : 0;
+        $fundingScore = $fundingExtreme ? self::SCORE_FUNDING : 0;
         $totalScoreRaw = $sweepScore + $mssScore + $entryZoneScore + $oiScore + $fundingScore;
         $totalScoreNormalized = (int) round(($totalScoreRaw / self::SCORE_MAX) * 100);
 
@@ -320,15 +326,15 @@ class CounterTrendService
 
         return [
             'signal' => [
-                'symbol' => strtoupper($symbol).'USDT',
+                'symbol' => $futuresSymbol,
                 'price' => round($currentPrice, 8),
                 'total_score' => $totalScoreNormalized,
                 'components' => [
                     'liquidity_sweep' => $sweep['confirmed'],
                     'mss' => $mss,
                     'fvg_or_ob' => $hasEntryZone,
-                    'oi_decline' => false,
-                    'funding_extreme' => false,
+                    'oi_decline' => $oiDecline,
+                    'funding_extreme' => $fundingExtreme,
                     'score_breakdown' => [
                         'sweep' => $sweepScore,
                         'mss' => $mssScore,
@@ -502,5 +508,54 @@ class CounterTrendService
         }
 
         return $fvgFound || $obFound;
+    }
+
+    /**
+     * Detect whether open interest declined ≥5% over the recent period,
+     * indicating exhaustion concurrent with the liquidity sweep.
+     *
+     * Uses Binance Futures /fapi/v1/openInterestHist (1H period, last 5 snapshots).
+     * Returns false when futures data is unavailable (graceful degradation).
+     */
+    private function detectOiDecline(string $futuresSymbol): bool
+    {
+        $history = $this->binanceFuturesService->fetchOpenInterestHistory(
+            symbol: $futuresSymbol,
+            period: '1h',
+            limit: 5,
+        );
+
+        if ($history === null || count($history) < 2) {
+            return false;
+        }
+
+        $earliest = $history[0]['sumOpenInterest'];
+        $latest = $history[array_key_last($history)]['sumOpenInterest'];
+
+        if ($earliest <= 0.0) {
+            return false;
+        }
+
+        // Require ≥5% OI decline to qualify as exhaustion confirmation
+        return ($earliest - $latest) / $earliest >= 0.05;
+    }
+
+    /**
+     * Detect whether the current funding rate is extreme (< -0.1% or > +0.1%),
+     * indicating one-sided positioning that supports a reversal.
+     *
+     * Uses Binance Futures /fapi/v1/fundingRate.
+     * Returns false when futures data is unavailable (graceful degradation).
+     */
+    private function detectExtremeFundingRate(string $futuresSymbol): bool
+    {
+        $data = $this->binanceFuturesService->fetchLatestFundingRate($futuresSymbol);
+
+        if ($data === null) {
+            return false;
+        }
+
+        // Threshold: |funding rate| > 0.001 (0.1% per 8H)
+        return abs($data['funding_rate']) > 0.001;
     }
 }

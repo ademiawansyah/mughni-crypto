@@ -62,7 +62,7 @@ return [
     ],
 
     'binance' => [
-        'base_url' => env('BINANCE_BASE_URL', 'https://api.binance.com'),
+        'base_url' => env('BINANCE_BASE_URL', 'https://fapi.binance.com/fapi/v1'),
         'api_key' => env('BINANCE_API_KEY'),
         'api_secret' => env('BINANCE_API_SECRET'),
         'timeout' => (int) env('BINANCE_TIMEOUT', 10),

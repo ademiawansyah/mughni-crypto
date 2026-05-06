@@ -20,7 +20,7 @@ class BinanceFuturesService
     public function __construct()
     {
         $this->enabled = (bool) config('market.binance_futures.enabled', true);
-        $this->baseUrl = (string) config('market.binance_futures.base_url', 'https://fapi.binance.com');
+        $this->baseUrl = (string) config('market.binance_futures.base_url', 'https://fapi.binance.com/fapi/v1');
         $this->timeout = (int) config('market.binance_futures.timeout', 10);
         $this->cacheTtlSeconds = (int) config('market.binance_futures.cache_ttl_seconds', 120);
     }
@@ -41,7 +41,7 @@ class BinanceFuturesService
         }
 
         $params = ['symbol' => strtoupper($symbol)];
-        $response = $this->sendGet('/fapi/v1/openInterest', $params);
+        $response = $this->sendGet('/openInterest', $params);
 
         if ($response === null) {
             return null;
@@ -104,7 +104,7 @@ class BinanceFuturesService
             'limit' => 1,
         ];
 
-        $response = $this->sendGet('/fapi/v1/fundingRate', $params);
+        $response = $this->sendGet('/fundingRate', $params);
 
         if (! is_array($response) || $response === []) {
             return null;
@@ -131,6 +131,64 @@ class BinanceFuturesService
     }
 
     /**
+     * Fetch historical open interest snapshots for a perpetual futures symbol.
+     *
+     * Returns an ordered array of OI records from oldest to newest, each with:
+     *   - sumOpenInterest (float): contract units
+     *   - timestamp (int): unix ms
+     *
+     * @param  string  $period  One of: 5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d
+     * @return array<int, array{sumOpenInterest: float, timestamp: int}>|null
+     */
+    public function fetchOpenInterestHistory(string $symbol, string $period = '1h', int $limit = 5): ?array
+    {
+        if (! $this->enabled) {
+            return null;
+        }
+
+        $safeLimit = max(2, min($limit, 500));
+        $cacheKey = sprintf('binance:futures:oi_hist:%s:%s:%d', strtoupper($symbol), $period, $safeLimit);
+
+        if (Cache::has($cacheKey)) {
+            return Cache::get($cacheKey);
+        }
+
+        $params = [
+            'symbol' => strtoupper($symbol),
+            'period' => $period,
+            'limit' => $safeLimit,
+        ];
+
+        $response = $this->sendGet('/openInterestHist', $params);
+
+        if (! is_array($response) || $response === []) {
+            return null;
+        }
+
+        $records = [];
+
+        foreach ($response as $row) {
+            if (! is_array($row) || ! is_numeric($row['sumOpenInterest'] ?? null)) {
+                continue;
+            }
+
+            $records[] = [
+                'sumOpenInterest' => (float) $row['sumOpenInterest'],
+                'timestamp' => (int) ($row['timestamp'] ?? 0),
+            ];
+        }
+
+        if (count($records) < 2) {
+            return null;
+        }
+
+        // Cache for half the period to stay fresh
+        Cache::put($cacheKey, $records, now()->addSeconds((int) ($this->cacheTtlSeconds / 2)));
+
+        return $records;
+    }
+
+    /**
      * @return array{trades: array<int, array<string, mixed>>, request_params: array<string, mixed>, raw_response: array<string, mixed>}|null
      */
     public function fetchAggTrades(string $symbol, int $limit = 200): ?array
@@ -151,7 +209,7 @@ class BinanceFuturesService
             'limit' => $safeLimit,
         ];
 
-        $response = $this->sendGet('/fapi/v1/aggTrades', $params);
+        $response = $this->sendGet('/aggTrades', $params);
 
         if (! is_array($response)) {
             return null;
@@ -223,7 +281,7 @@ class BinanceFuturesService
             return Cache::get($cacheKey, []);
         }
 
-        $response = $this->sendGet('/fapi/v1/exchangeInfo', []);
+        $response = $this->sendGet('/exchangeInfo', []);
 
         if (! is_array($response)) {
             return [];
@@ -268,7 +326,7 @@ class BinanceFuturesService
         }
 
         $params = ['symbol' => strtoupper($symbol)];
-        $response = $this->sendGet('/fapi/v1/premiumIndex', $params);
+        $response = $this->sendGet('/premiumIndex', $params);
 
         if (! is_array($response)) {
             return null;
