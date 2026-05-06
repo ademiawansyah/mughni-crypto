@@ -33,39 +33,39 @@ class RunAllCronJobsCommand extends Command
         try {
 
             // Layer 1: Shared Fetch (always runs first)
-            // if (GeneralConfig::isCronEnabled()) {
-            //     $this->info('▶ Running Layer 1: Shared Fetch (Layer1RawCoinFetchJob)...');
-            //     Layer1RawCoinFetchJob::dispatchSync($executionId);
-            //     $this->line('  ✓ Layer 1: Shared Fetch completed');
-            // } else {
-            //     $this->line('  ⊘ Layer 1: Shared Fetch skipped (cron disabled)');
-            // }
-
-            // Layer 2: Pre-Filter (always runs after Layer 1)
             if (GeneralConfig::isCronEnabled()) {
-                $this->info('▶ Running Layer 2: Pre-Filter (Layer2Pre   FilterCoinJob)...');
-                Layer2PreFilterCoinJob::dispatchSync($executionId);
-                $this->line('  ✓ Layer 2: Pre-Filter completed');
+                $this->info('▶ Running Layer 1: Shared Fetch (Layer1RawCoinFetchJob)...');
+                Layer1RawCoinFetchJob::dispatchSync($executionId);
+                $this->line('  ✓ Layer 1: Shared Fetch completed');
             } else {
-                $this->line('  ⊘ Layer 2: Pre-Filter skipped (  cron disabled)');
+                $this->line('  ⊘ Layer 1: Shared Fetch skipped (cron disabled)');
             }
 
+            // Layer 2: Pre-Filter (always runs after Layer 1)
+            // if (GeneralConfig::isCronEnabled()) {
+            //     $this->info('▶ Running Layer 2: Pre-Filter (Layer2Pre   FilterCoinJob)...');
+            //     Layer2PreFilterCoinJob::dispatchSync($executionId);
+            //     $this->line('  ✓ Layer 2: Pre-Filter completed');
+            // } else {
+            //     $this->line('  ⊘ Layer 2: Pre-Filter skipped (  cron disabled)');
+            // }
+
             // Model Run
-            // $this->info('▶ Running CounterTrendJob (model run)...');
-            // CounterTrendJob::dispatchSync($executionId);
-            // $this->line('  ✓ CounterTrendJob completed');
+            $this->info('▶ Running CounterTrendJob (model run)...');
+            CounterTrendJob::dispatchSync($executionId);
+            $this->line('  ✓ CounterTrendJob completed');
 
-            // $this->info('▶ Running PrePumpJob (model run)...');
-            // PrePumpJob::dispatchSync($executionId);
-            // $this->line('  ✓ PrePumpJob completed');
+            $this->info('▶ Running PrePumpJob (model run)...');
+            PrePumpJob::dispatchSync($executionId);
+            $this->line('  ✓ PrePumpJob completed');
 
-            // $this->info('▶ Running TrendMomentumJob (model run)...');
-            // TrendMomentumJob::dispatchSync($executionId);
-            // $this->line('  ✓ TrendMomentumJob completed');
+            $this->info('▶ Running TrendMomentumJob (model run)...');
+            TrendMomentumJob::dispatchSync($executionId);
+            $this->line('  ✓ TrendMomentumJob completed');
 
-            // $this->info('▶ Running SpotMomentumGainerJob (model run)...');
-            // SpotMomentumGainerJob::dispatchSync($executionId);
-            // $this->line('  ✓ SpotMomentumGainerJob completed');
+            $this->info('▶ Running SpotMomentumGainerJob (model run)...');
+            SpotMomentumGainerJob::dispatchSync($executionId);
+            $this->line('  ✓ SpotMomentumGainerJob completed');
 
             $this->newLine();
             $this->info('✅ All cron jobs completed successfully!');
