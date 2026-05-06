@@ -56,10 +56,26 @@ class PreFilterCoinService
         $updated = 0;
 
         $coins = Coin::get();
+        Log::info('[PreFilterCoinService] Starting Layer 2 filtering', [
+            'total_coins' => $coins->count(),
+        ]);
         foreach ($coins as $coin) {
             $processed++;
 
-            $isValid = $this->isValidCoin($coin->toArray());
+            $validation = $this->validateCoinWithReason($coin->toArray());
+            $isValid = $validation['valid'];
+            $reason = $validation['reason'];
+
+            Log::info('[PreFilterCoinService] Validating coin', [
+                'coin_id' => $coin->id,
+                'symbol' => $coin->symbol,
+                'name' => $coin->name,
+                'market_cap' => $coin->market_cap,
+                'volume_24h' => $coin->volume_24h,
+                'current_price' => $coin->current_price,
+                'is_valid' => $isValid,
+                'reason' => $reason,
+            ]);
 
             if ($isValid) {
                 $valid++;
@@ -67,13 +83,26 @@ class PreFilterCoinService
                 $invalid++;
             }
 
-            if ($coin->is_valid !== $isValid) {
+            $isValidChanged = $coin->is_valid !== $isValid;
+
+            // Persist reason even when validity status stays the same.
+            $additionalData = is_array($coin->additional_data) ? $coin->additional_data : [];
+            $reasonChanged = ($additionalData['shared_pre_filter_reason'] ?? null) !== $reason;
+
+            if ($reasonChanged) {
+                $additionalData['shared_pre_filter_reason'] = $reason;
+                $coin->additional_data = $additionalData;
+            }
+
+            if ($isValidChanged) {
                 $coin->is_valid = $isValid;
+            }
+
+            if ($isValidChanged || $reasonChanged) {
                 $coin->save();
                 $updated++;
             }
         }
-
 
         Log::info('[PreFilterCoinService] Layer 2 filtering completed', [
             'processed' => $processed,
@@ -107,6 +136,17 @@ class PreFilterCoinService
      */
     public function isValidCoin(array $coin): bool
     {
+        return $this->validateCoinWithReason($coin)['valid'];
+    }
+
+    /**
+     * Validate a coin and return both validity status and reason.
+     *
+     * @param  array<string, mixed>  $coin
+     * @return array{valid: bool, reason: string}
+     */
+    private function validateCoinWithReason(array $coin): array
+    {
         $symbol = strtolower($coin['symbol'] ?? '');
         $name = strtolower($coin['name'] ?? '');
         $marketCap = $this->toFloat($coin['market_cap'] ?? null);
@@ -121,32 +161,32 @@ class PreFilterCoinService
 
         // Exclude stable coins
         if (in_array($symbol, self::STABLE_COINS, true)) {
-            return false;
+            return ['valid' => false, 'reason' => 'Stablecoin detected'];
         }
 
         // Exclude wrapped tokens
         foreach (self::WRAPPED_TOKENS as $wrapped) {
             if (strpos($name, $wrapped) !== false) {
-                return false;
+                return ['valid' => false, 'reason' => 'Wrapped token detected'];
             }
         }
 
         // Data completeness check: current_price and volume must be present and positive.
         if ($currentPrice <= 0 || $volume <= 0) {
-            return false;
+            return ['valid' => false, 'reason' => 'Missing or invalid price/volume data'];
         }
 
         // Exclude low volume coins
         if ($volume < self::MINIMUM_VOLUME) {
-            return false;
+            return ['valid' => false, 'reason' => sprintf('Volume below minimum (%.2f < %d)', $volume, self::MINIMUM_VOLUME)];
         }
 
         // Exclude low market cap coins
         if ($marketCap < self::MINIMUM_MARKET_CAP) {
-            return false;
+            return ['valid' => false, 'reason' => sprintf('Market cap below minimum (%.2f < %d)', $marketCap, self::MINIMUM_MARKET_CAP)];
         }
 
-        return true;
+        return ['valid' => true, 'reason' => 'Passed all pre-filter rules'];
     }
 
     /**

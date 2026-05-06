@@ -23,6 +23,7 @@ class Coin extends Model
         'volume_24h',
         'current_price',
         'raw_data',
+        'additional_data',
         'is_valid',
     ];
 
@@ -33,8 +34,15 @@ class Coin extends Model
      */
     protected $casts = [
         'raw_data' => 'array',
+        'additional_data' => 'array',
         'coin_data_last_updated' => 'datetime',
         'last_fetched_at' => 'datetime',
         'is_valid' => 'boolean',
     ];
+
+    public function preSharedInvalidReasons(): string|null
+    {
+        $additionalData = is_array($this->additional_data) ? $this->additional_data : [];
+        return $additionalData['shared_pre_filter_reason'] ?? null;
+    }
 }
