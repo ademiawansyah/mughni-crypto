@@ -3,6 +3,8 @@
 use App\Jobs\Layer1RawCoinFetchJob;
 use App\Jobs\PrePumpJob;
 use App\Jobs\SpotMomentumGainerJob;
+use App\Jobs\CounterTrendJob;
+use App\Jobs\TrendMomentumJob;
 use App\Models\GeneralConfig;
 use App\Services\Notification\NotificationService;
 use Illuminate\Foundation\Inspiring;
@@ -61,6 +63,19 @@ Schedule::job(new Layer1RawCoinFetchJob)
     ->withoutOverlapping()
     ->when(fn(): bool => GeneralConfig::isCronEnabled());
 
+
+/** * ============================================================================
+ * MODEL 1: COUNTER-TREND (Every 15 minutes)
+ * ============================================================================
+ * Runs independent Model 1 scanning pipeline using cached/shared market data.
+ */
+Schedule::job(new CounterTrendJob)
+    ->everyFifteenMinutes()
+    ->withoutOverlapping()
+    ->when(fn(): bool => GeneralConfig::isCronEnabled())
+    ->when(fn(): bool => GeneralConfig::isModelEnabled('counter_trend'));
+
+
 /**
  * ============================================================================
  * MODEL 2: PRE-PUMP (Every 4 hours)
@@ -72,6 +87,18 @@ Schedule::job(new PrePumpJob)
     ->withoutOverlapping()
     ->when(fn(): bool => GeneralConfig::isCronEnabled())
     ->when(fn(): bool => GeneralConfig::isModelEnabled('pre_pump'));
+
+/**
+ * ============================================================================
+ * MODEL 3: TREND MOMENTUM (Every 15 minutes)
+ * ============================================================================
+ * Runs independent Model 3 scanning pipeline using cached/shared market data.
+ */
+Schedule::job(new TrendMomentumJob)
+    ->cron((string) config('models.pre_pump.job_schedule', '0 */4 * * *'))
+    ->withoutOverlapping()
+    ->when(fn(): bool => GeneralConfig::isCronEnabled())
+    ->when(fn(): bool => GeneralConfig::isModelEnabled('momentum'));
 
 /**
  * ============================================================================
