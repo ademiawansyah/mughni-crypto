@@ -68,4 +68,11 @@ return [
         'timeout' => (int) env('BINANCE_TIMEOUT', 10),
     ],
 
+    'binance_futures' => [
+        'enabled' => (bool) env('BINANCE_FUTURES_ENABLED', true),
+        'base_url' => env('BINANCE_FUTURES_BASE_URL', 'https://fapi.binance.com/fapi/v1'),
+        'timeout' => (int) env('BINANCE_FUTURES_TIMEOUT', 10),
+        'cache_ttl_seconds' => (int) env('BINANCE_FUTURES_CACHE_TTL_SECONDS', 120),
+    ],
+
 ];

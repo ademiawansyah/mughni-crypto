@@ -3,8 +3,6 @@
 namespace App\Services\Market\Models;
 
 use App\Models\Coin;
-use App\Models\CoinMarketData;
-use App\Services\External\BinanceFuturesService;
 use App\Services\Market\MarketRegimeService;
 use App\Services\Trading\ModelOutputStoreService;
 use Illuminate\Support\Facades\Log;
@@ -39,7 +37,6 @@ class CounterTrendService
     public function __construct(
         private readonly MarketRegimeService $marketRegimeService,
         private readonly ModelOutputStoreService $modelOutputStoreService,
-        private readonly BinanceFuturesService $binanceFuturesService,
     ) {}
 
     /**
@@ -132,11 +129,11 @@ class CounterTrendService
 
         usort(
             $signals,
-            static fn(array $left, array $right): int => $right['total_score'] <=> $left['total_score'],
+            static fn (array $left, array $right): int => $right['total_score'] <=> $left['total_score'],
         );
 
         $ranked = array_values(array_map(
-            static fn(array $signal, int $index): array => array_merge($signal, ['rank' => $index + 1]),
+            static fn (array $signal, int $index): array => array_merge($signal, ['rank' => $index + 1]),
             array_slice($signals, 0, self::MAX_RESULTS),
             array_keys(array_slice($signals, 0, self::MAX_RESULTS)),
         ));
@@ -199,22 +196,6 @@ class CounterTrendService
             $coin->symbol,
             $timeframe,
             $limit,
-        );
-
-        if ($klines === []) {
-            return [];
-        }
-
-        CoinMarketData::query()->updateOrCreate(
-            [
-                'coin_id' => $coin->id,
-                'data_type' => 'ohlcv',
-                'source' => 'binance',
-                'interval' => $timeframe,
-            ],
-            [
-                'data' => $klines,
-            ],
         );
 
         return $klines;
@@ -309,7 +290,7 @@ class CounterTrendService
 
         $hasEntryZone = $this->hasEntryZoneFromFvgOrOrderBlock($entryCandles, $sweep['direction']);
 
-        $futuresSymbol = strtoupper($symbol) . 'USDT';
+        $futuresSymbol = strtoupper($symbol).'USDT';
         $oiDecline = $this->detectOiDecline($futuresSymbol);
         $fundingExtreme = $this->detectExtremeFundingRate($futuresSymbol);
 
@@ -519,7 +500,7 @@ class CounterTrendService
      */
     private function detectOiDecline(string $futuresSymbol): bool
     {
-        $history = $this->binanceFuturesService->fetchOpenInterestHistory(
+        $history = $this->marketRegimeService->getOpenInterestHistoryForCoin(
             symbol: $futuresSymbol,
             period: '1h',
             limit: 5,
@@ -549,7 +530,7 @@ class CounterTrendService
      */
     private function detectExtremeFundingRate(string $futuresSymbol): bool
     {
-        $data = $this->binanceFuturesService->fetchLatestFundingRate($futuresSymbol);
+        $data = $this->marketRegimeService->getLatestFundingRateForCoin($futuresSymbol);
 
         if ($data === null) {
             return false;
