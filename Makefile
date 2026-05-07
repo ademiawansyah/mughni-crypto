@@ -1,4 +1,4 @@
-.PHONY: build up down restart logs shell artisan composer migrate seed test run
+.PHONY: build up down restart logs shell artisan composer migrate seed test run tunnel-up tunnel-down tunnel-logs
 
 build:
 	docker compose build
@@ -20,6 +20,15 @@ rebuild: down build-fresh up
 
 logs:
 	docker-compose logs -f
+
+tunnel-up:
+	docker compose --profile cloudflare up -d cloudflared
+
+tunnel-down:
+	docker compose --profile cloudflare stop cloudflared
+
+tunnel-logs:
+	docker compose --profile cloudflare logs -f cloudflared
 
 shell:
 	docker exec -it al_mughni bash

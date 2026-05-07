@@ -110,3 +110,59 @@ docker exec -it al_mughni bash /var/www/html/scripts/deploy-from-webhook.sh
 Deployment logs:
 - Laravel job logs: `storage/logs/deployment.log`
 - Script logs: `storage/logs/deploy-script.log`
+
+## Cloudflare Tunnel (`mughni-crypto.web.id`)
+
+This repository now includes an optional `cloudflared` service in Docker Compose. It is disabled by default and only starts when you run the Cloudflare profile.
+
+### 1) Set the application URL in `.env`
+
+Use your public hostname so Laravel generates secure links and cookies correctly:
+
+```dotenv
+APP_URL=https://mughni-crypto.web.id
+SESSION_DOMAIN=mughni-crypto.web.id
+SESSION_SECURE_COOKIE=true
+CLOUDFLARE_TUNNEL_TOKEN=replace_with_your_cloudflare_tunnel_token
+```
+
+### 2) Create the tunnel in Cloudflare Zero Trust
+
+Create a remotely managed tunnel in Cloudflare and add a public hostname:
+
+- Hostname: `mughni-crypto.web.id`
+- Service type: `HTTP`
+- URL / origin service: `http://nginx:80`
+
+Cloudflare will give you a tunnel token. Put that token in `CLOUDFLARE_TUNNEL_TOKEN`.
+
+### 3) Start the app and tunnel
+
+```bash
+make up
+make tunnel-up
+```
+
+To inspect the tunnel logs:
+
+```bash
+make tunnel-logs
+```
+
+To stop only the tunnel:
+
+```bash
+make tunnel-down
+```
+
+### 4) Lock down direct origin access
+
+Cloudflare Tunnel does not need inbound access to your server's published web ports. Restrict direct access to the host ports with your firewall or reverse-proxy rules so traffic reaches the app through Cloudflare instead of bypassing it.
+
+### 5) Webhook URL for this domain
+
+After the tunnel is active, your GitHub webhook endpoint becomes:
+
+```text
+https://mughni-crypto.web.id/webhook/github
+```
