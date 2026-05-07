@@ -1,22 +1,22 @@
-.PHONY: build up down restart logs shell artisan composer migrate seed test
+.PHONY: build up down restart logs shell artisan composer migrate seed test run
 
 build:
-	docker-compose build
+	docker compose build
 
 build-fresh:
-	docker-compose build --no-cache
+	docker compose build --no-cache
 
 up:
-	docker-compose up -d --remove-orphans
+	docker compose up -d --remove-orphans
 
 down:
-	docker-compose down
+	docker compose down
 
 restart: down up
 
-rebuild: down build up
+refresh: down build up
 
-refresh: down build-fresh up
+rebuild: down build-fresh up
 
 logs:
 	docker-compose logs -f
@@ -33,6 +33,15 @@ composer:
 migrate:
 	docker exec -it al_mughni php artisan migrate
 
+migrate-force:
+	docker exec -it al_mughni php artisan migrate --force
+
+migrate-refresh:
+	docker exec -it al_mughni php artisan migrate:refresh
+
+migrate-rollback:
+	docker exec -it al_mughni php artisan migrate:rollback
+
 seed:
 	docker exec -it al_mughni php artisan db:seed --force
 
@@ -42,16 +51,32 @@ aux:
 redis-clear:
 	docker exec -it al_mughni php artisan cache:clear
 	docker exec -it al_mughni php artisan queue:clear
-	docker exec -it al_mughni php artisan config:clear
-	docker exec -it al_mughni php artisan route:clear
-	docker exec -it al_mughni php artisan view:clear
+
+cron-run-all:
+	docker exec -it al_mughni php artisan cron:run-all
+
+clean-redis:
+	docker exec redis_db redis-cli FLUSHALL
 
 redis-flush:
 	docker exec -it al_mughni php artisan queue:flush
-	docker exec -it fotoria php artisan queue:prune-failed
+	docker exec -it al_mughni php artisan queue:prune-failed
+	docker exec -it al_mughni php artisan cache:clear
+	docker exec -it al_mughni php artisan horizon:clear
+	docker exec -it al_mughni php artisan horizon:forget
 
 boost-update:
 	docker exec -it al_mughni php artisan boost:update --discover
+
+run-scheduler:
+	docker exec -it al_mughni php artisan schedule:work
+
+run-queue:
+	docker exec -it al_mughni php artisan queue:work --sleep=3 --tries=3
+
+run-worker:
+	docker exec -d al_mughni php artisan schedule:work
+	docker exec -it al_mughni php artisan queue:work --sleep=3 --tries=3
 
 
 # usage examples:

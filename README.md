@@ -56,3 +56,57 @@ If you discover a security vulnerability within Laravel, please send an e-mail t
 ## License
 
 The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+
+## Ubuntu 24.04 Deployment (Docker + main-service)
+
+This project expects PostgreSQL and Redis from `main-service` on shared Docker network `dev-network`.
+
+### 1) Run bootstrap from local machine
+
+```bash
+ssh edualima-server 'bash -s' < scripts/setup-ubuntu-24.04.sh
+```
+
+If you want the script to clone repositories automatically, pass variables:
+
+```bash
+MAIN_SERVICE_REPO='git@github.com:YOUR_ORG/main-service.git' \
+MUGHNI_REPO='git@github.com:YOUR_ORG/mughni-crypto.git' \
+DEPLOY_BRANCH='main' \
+ssh edualima-server 'MAIN_SERVICE_REPO="'"$MAIN_SERVICE_REPO"'" MUGHNI_REPO="'"$MUGHNI_REPO"'" DEPLOY_BRANCH="'"$DEPLOY_BRANCH"'" bash -s' < scripts/setup-ubuntu-24.04.sh
+```
+
+### 2) Required environment variables for webhook deploy
+
+Add these values in `.env` (inside `mughni-crypto`):
+
+```dotenv
+GITHUB_WEBHOOK_SECRET=replace_with_random_secret
+GITHUB_DEPLOY_BRANCH=main
+GITHUB_DEPLOY_REPOSITORY=OWNER/REPO
+GITHUB_DEPLOY_QUEUE=default
+GITHUB_DEPLOY_SCRIPT_PATH=/var/www/html/scripts/deploy-from-webhook.sh
+GITHUB_DEPLOY_SCRIPT_TIMEOUT=600
+```
+
+### 3) GitHub webhook endpoint
+
+- URL: `https://YOUR_TUNNEL_DOMAIN/webhook/github`
+- Content type: `application/json`
+- Secret: same as `GITHUB_WEBHOOK_SECRET`
+- Event: `push`
+
+The app verifies:
+- `X-Hub-Signature-256`
+- Push branch matches `GITHUB_DEPLOY_BRANCH`
+- Repository matches `GITHUB_DEPLOY_REPOSITORY` (if set)
+
+### 4) Manual deploy script execution in app container
+
+```bash
+docker exec -it al_mughni bash /var/www/html/scripts/deploy-from-webhook.sh
+```
+
+Deployment logs:
+- Laravel job logs: `storage/logs/deployment.log`
+- Script logs: `storage/logs/deploy-script.log`

@@ -16,6 +16,8 @@ services:
       - composer-cache:/tmp/composer
     networks:
       - dev-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # NOTE: do NOT declare postgres_db / redis_db here — main-service supplies them on the external network.
 
   nginx:

@@ -93,6 +93,20 @@ Each job must do only one responsibility.
 
 ---
 
+## COMMAND EXECUTION RULES
+
+* In this repository, run project commands via Makefile wrappers.
+* Do not repeat the same failing command pattern multiple times.
+* If host-level or direct Artisan/Composer execution fails, switch immediately to:
+
+	* `make artisan cmd="..."`
+	* `make composer cmd="..."`
+* If Pint is not available through Artisan, run:
+
+	* `make composer cmd="exec -- pint --dirty --format agent"`
+
+---
+
 ## WHAT NOT TO DO
 
 * Do not put logic in controllers
