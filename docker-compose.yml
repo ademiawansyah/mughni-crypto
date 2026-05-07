@@ -12,7 +12,6 @@ services:
     env_file:
       - .env
     volumes:
-      - app-code:/var/www/html
       - composer-cache:/tmp/composer
     networks:
       - dev-network
@@ -22,12 +21,27 @@ services:
       - no-new-privileges:true
     # NOTE: do NOT declare postgres_db / redis_db here — main-service supplies them on the external network.
 
+  app_public_sync:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        USER_UID: 1000
+        USER_GID: 1000
+    image: al_mughni:local
+    user: "0:0"
+    command: ["/var/www/html/public", "/srv/public"]
+    entrypoint: ["/usr/local/bin/sync-public-assets.sh"]
+    restart: "no"
+    volumes:
+      - public-assets:/srv/public
+
   nginx:
     image: nginx:1.25
     container_name: al_mughni_nginx
     restart: unless-stopped
     volumes:
-      - app-code:/var/www/html:ro
+      - public-assets:/var/www/html/public:ro
       - ./docker/nginx/conf.d/:/etc/nginx/conf.d:ro
     networks:
       - dev-network
@@ -60,5 +74,5 @@ networks:
     external: true
 
 volumes:
-  app-code:
+  public-assets:
   composer-cache:

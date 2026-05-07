@@ -140,7 +140,6 @@ Cloudflare will give you a tunnel token. Put that token in `CLOUDFLARE_TUNNEL_TO
 
 ```bash
 make up
-make tunnel-up
 ```
 
 To inspect the tunnel logs:
@@ -154,6 +153,8 @@ To stop only the tunnel:
 ```bash
 make tunnel-down
 ```
+
+`make up` now rebuilds the application image and re-syncs the public assets used by Nginx, so code changes are picked up automatically without a manual `docker cp`.
 
 ### 4) Lock down direct origin access
 

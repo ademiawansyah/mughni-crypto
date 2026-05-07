@@ -7,14 +7,16 @@ build-fresh:
 	docker compose build --no-cache
 
 up:
-	docker compose up -d --remove-orphans
+	docker compose up -d --build app
+	docker compose run --rm --no-deps app_public_sync
+	docker compose up -d --remove-orphans nginx cloudflared
 
 down:
 	docker compose down
 
 restart: down up
 
-refresh: down build up
+refresh: down up
 
 rebuild: down build-fresh up
 

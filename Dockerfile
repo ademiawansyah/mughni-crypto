@@ -93,8 +93,10 @@ RUN chown -R foto:foto /var/www/html && chmod -R 775 storage bootstrap/cache || 
 # --------------------------------------------------------------------
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY wait-for-redis.sh /usr/local/bin/wait-for-redis.sh
+COPY scripts/sync-public-assets.sh /usr/local/bin/sync-public-assets.sh
 
 RUN chmod +x /usr/local/bin/wait-for-redis.sh \
+ && chmod +x /usr/local/bin/sync-public-assets.sh \
  && mkdir -p /var/log/supervisor \
  && chown -R foto:foto /var/log/supervisor \
  && chmod 1777 /tmp
