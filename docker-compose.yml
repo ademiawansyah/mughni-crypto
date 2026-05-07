@@ -12,6 +12,7 @@ services:
     env_file:
       - .env
     volumes:
+      - ./storage/logs:/var/www/html/storage/logs
       - composer-cache:/tmp/composer
     networks:
       - dev-network
