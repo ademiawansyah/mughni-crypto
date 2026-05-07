@@ -13,6 +13,7 @@
         "laravel/horizon": "^5.45",
         "laravel/pulse": "^1.7",
         "laravel/tinker": "^3.0",
+        "sentry/sentry-laravel": "^4.25",
         "stephenjude/filament-debugger": "^5.1"
     },
     "require-dev": {
