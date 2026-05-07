@@ -1,16 +1,16 @@
 .PHONY: build up down restart logs shell artisan composer migrate seed test run
 
 build:
-	docker-compose build
+	docker compose build
 
 build-fresh:
-	docker-compose build --no-cache
+	docker compose build --no-cache
 
 up:
-	docker-compose up -d --remove-orphans
+	docker compose up -d --remove-orphans
 
 down:
-	docker-compose down
+	docker compose down
 
 restart: down up
 
