@@ -19,7 +19,7 @@ RUN sed -i 's|deb.debian.org|kartolo.sby.datautama.net.id|g' /etc/apt/sources.li
 # 1️⃣ System Dependencies
 # --------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
-  git unzip curl sudo supervisor netcat-openbsd \
+  git unzip curl supervisor netcat-openbsd \
   libpng-dev libjpeg-dev libfreetype6-dev libwebp-dev \
   libxml2-dev libzip-dev libicu-dev libonig-dev libpq-dev \
   libmagickwand-dev \
@@ -53,8 +53,7 @@ COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 # 4️⃣ Create non-root user (same UID/GID as host)
 # --------------------------------------------------------------------
 RUN groupadd -g ${USER_GID} foto && \
-    useradd -u ${USER_UID} -g foto -m -s /bin/bash foto && \
-    usermod -aG sudo foto
+    useradd -u ${USER_UID} -g foto -m -s /bin/bash foto
 
 # --------------------------------------------------------------------
 # 5️⃣ Set working directory

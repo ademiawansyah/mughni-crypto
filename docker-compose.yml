@@ -12,27 +12,33 @@ services:
     env_file:
       - .env
     volumes:
-      - ./:/var/www/html:delegated
+      - app-code:/var/www/html
       - composer-cache:/tmp/composer
     networks:
       - dev-network
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    security_opt:
+      - no-new-privileges:true
     # NOTE: do NOT declare postgres_db / redis_db here — main-service supplies them on the external network.
 
   nginx:
     image: nginx:1.25
     container_name: al_mughni_nginx
     restart: unless-stopped
-    ports:
-      - "80:80"
     volumes:
-      - ./:/var/www/html:ro
+      - app-code:/var/www/html:ro
       - ./docker/nginx/conf.d/:/etc/nginx/conf.d:ro
     networks:
       - dev-network
     depends_on:
       - app
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
 
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -43,10 +49,16 @@ services:
       - dev-network
     depends_on:
       - nginx
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
 
 networks:
   dev-network:
     external: true
 
 volumes:
+  app-code:
   composer-cache:

@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+.git/hooks
+.git/lfs
+node_modules
+vendor
+storage/logs/*
+.copilot
