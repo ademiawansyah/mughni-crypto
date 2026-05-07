@@ -39,8 +39,6 @@ services:
     container_name: al_mughni_cloudflared
     restart: unless-stopped
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
-    profiles:
-      - cloudflare
     networks:
       - dev-network
     depends_on:
