@@ -8,6 +8,40 @@ use Tests\TestCase;
 
 class NotificationServiceTest extends TestCase
 {
+    public function test_it_skips_model_execution_telegram_notification_when_no_coin_passed(): void
+    {
+        Log::spy();
+
+        config([
+            'services.telegram.bot' => 'mybot',
+            'services.telegram.chat_id' => '',
+        ]);
+
+        $service = app(NotificationService::class);
+
+        $service->sendModelExecutionResult([
+            'execution_id' => 'exec-no-pass',
+            'model' => 'pre_pump',
+            'evaluated' => 10,
+            'shortlisted' => 0,
+            'results' => [],
+        ]);
+
+        Log::shouldHaveReceived('info')
+            ->once()
+            ->with('[NotificationService] Skipping model execution notification because no coin passed', [
+                'execution_id' => 'exec-no-pass',
+                'model' => 'pre_pump',
+                'evaluated' => 10,
+                'shortlisted' => 0,
+            ]);
+
+        Log::shouldNotHaveReceived('warning', [
+            '[NotificationService] Telegram chat ID is not configured, skipping send',
+            ['execution_id' => 'exec-no-pass'],
+        ]);
+    }
+
     public function test_it_skips_telegram_send_when_chat_id_is_missing(): void
     {
         Log::spy();
