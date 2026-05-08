@@ -36,10 +36,19 @@ class NotificationServiceTest extends TestCase
                 'shortlisted' => 0,
             ]);
 
-        Log::shouldNotHaveReceived('warning')
+        Log::shouldNotHaveReceived('info')
             ->with(
-                '[NotificationService] Telegram chat ID is not configured, skipping send',
-                ['execution_id' => 'exec-no-pass'],
+                '[NotificationService] System notification triggered',
+                [
+                    'execution_id' => 'exec-no-pass',
+                    'title' => 'Pre Pump - No Setup',
+                    'lines' => [
+                        'Model: Pre Pump',
+                        'Evaluated: 10',
+                        'Passed: 0',
+                        'Result: No coin passed model criteria.',
+                    ],
+                ],
             );
     }
 
