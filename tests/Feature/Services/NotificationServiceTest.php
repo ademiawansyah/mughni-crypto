@@ -14,7 +14,7 @@ class NotificationServiceTest extends TestCase
 
         config([
             'services.telegram.bot' => 'mybot',
-            'services.telegram.chat_id' => '',
+            'services.telegram.chat_id' => '123456789',
         ]);
 
         $service = app(NotificationService::class);
