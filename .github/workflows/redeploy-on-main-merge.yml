@@ -47,12 +47,32 @@ jobs:
               }
             }')"
 
+          payload_sha256="$(printf '%s' "${payload}" | sha256sum | awk '{print $1}')"
+          secret_length="$(printf '%s' "${DEPLOY_WEBHOOK_SECRET}" | wc -c | awk '{print $1}')"
+          webhook_host="$(printf '%s\n' "${DEPLOY_WEBHOOK_URL}" | sed -E 's#^(https?://[^/]+).*$#\1#')"
+
+          echo "::notice::Webhook target=${webhook_host}"
+          echo "::notice::Merge commit=${MERGE_COMMIT_SHA}"
+          echo "::notice::Repository=${REPOSITORY_FULL_NAME}"
+          echo "::notice::Secret length=${secret_length}"
+          echo "::notice::Payload sha256=${payload_sha256}"
+
           signature="sha256=$(printf '%s' "${payload}" | openssl dgst -sha256 -hmac "${DEPLOY_WEBHOOK_SECRET}" | awk '{print $2}')"
 
-          curl --fail-with-body --silent --show-error \
+          response_code="$(
+            curl --silent --show-error --output /tmp/deploy-webhook-response.txt --write-out '%{http_code}' \
             -X POST \
             -H "Content-Type: application/json" \
             -H "X-GitHub-Event: push" \
             -H "X-Hub-Signature-256: ${signature}" \
             -d "${payload}" \
             "${DEPLOY_WEBHOOK_URL}"
+          )"
+
+          echo "::notice::Webhook response code=${response_code}"
+
+          if [[ "${response_code}" -ge 400 ]]; then
+            echo "Webhook request failed"
+            cat /tmp/deploy-webhook-response.txt
+            exit 1
+          fi
