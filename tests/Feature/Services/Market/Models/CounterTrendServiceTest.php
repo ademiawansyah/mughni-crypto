@@ -23,7 +23,7 @@ class CounterTrendServiceTest extends TestCase
             'market_cap' => 100_000_000,
             'total_volume' => 6_000_000,
             'volume_24h' => 6_000_000,
-            'current_price' => 101,
+            'current_price' => 101.25,
             'is_valid' => true,
             'raw_data' => [
                 'market_cap_rank' => 100,
@@ -31,14 +31,23 @@ class CounterTrendServiceTest extends TestCase
         ]);
 
         $marketRegimeService = $this->createMock(MarketRegimeService::class);
-        $marketRegimeService->expects($this->exactly(2))
+        $marketRegimeService->expects($this->once())
             ->method('getOhlcvDataForCoin')
-            ->willReturnOnConsecutiveCalls(
-                $this->structureKlines(),
-                $this->entryKlines(),
-            );
-        $marketRegimeService->method('getOpenInterestHistoryForCoin')->willReturn(null);
-        $marketRegimeService->method('getLatestFundingRateForCoin')->willReturn(null);
+            ->willReturn($this->structureKlines());
+
+        $marketRegimeService->expects($this->once())
+            ->method('getCounterTrendOpenInterestHistoryForCoin')
+            ->willReturn([
+                ['timestamp' => 1_700_000_000, 'open_interest' => 1000.0],
+                ['timestamp' => 1_700_003_600, 'open_interest' => 920.0],
+            ]);
+
+        $marketRegimeService->expects($this->once())
+            ->method('getCounterTrendFundingRateHistoryForCoin')
+            ->willReturn([
+                ['timestamp' => 1_700_000_000, 'funding_rate' => 0.0002],
+                ['timestamp' => 1_700_086_400, 'funding_rate' => 0.0012],
+            ]);
 
         $notificationService = $this->createMock(NotificationService::class);
         $notificationService->expects($this->once())
@@ -54,7 +63,9 @@ class CounterTrendServiceTest extends TestCase
 
         $this->assertSame('counter_trend', $result['model']);
         $this->assertSame(now()->toDateString(), $result['execution_date']);
+        $this->assertSame(1, $result['signal_count']);
         $this->assertCount(1, $result['results']);
+        $this->assertSame(100, $result['results'][0]['total_score']);
 
         $stored = ModelScanResult::query()
             ->where('model_name', 'counter_trend')
@@ -68,6 +79,12 @@ class CounterTrendServiceTest extends TestCase
         $this->assertSame('2.0', $stored->result['version']);
         $this->assertCount(1, $stored->result['results']);
         $this->assertSame('TESTUSDT', $stored->result['results'][0]['symbol']);
+        $this->assertSame('bearish', $stored->result['results'][0]['components']['liquidity_sweep']);
+        $this->assertSame('bearish', $stored->result['results'][0]['components']['mss']);
+        $this->assertTrue($stored->result['results'][0]['components']['oi_declining']);
+        $this->assertTrue($stored->result['results'][0]['components']['extreme_funding']);
+        $this->assertArrayHasKey('stop_loss', $stored->result['results'][0]['metadata']);
+        $this->assertArrayHasKey('fvg_zone', $stored->result['results'][0]['metadata']);
         $this->assertSame(1, $stored->supporting_data['evaluated']);
         $this->assertSame(1, $stored->supporting_data['shortlisted']);
         $this->assertCount(1, $stored->supporting_data['all_scored_results']);
@@ -80,50 +97,50 @@ class CounterTrendServiceTest extends TestCase
     {
         $klines = [];
 
-        for ($index = 0; $index < 29; $index++) {
+        for ($index = 0; $index < 30; $index++) {
+            $openTime = 1_700_000_000_000 + ($index * 3_600_000);
+            $open = 100.0;
+            $high = 105.0;
+            $low = 95.0;
+            $close = 100.0;
+
+            if ($index === 10) {
+                $open = 108.0;
+                $high = 120.0;
+                $low = 99.0;
+                $close = 110.0;
+            }
+
+            if ($index === 14) {
+                $open = 96.0;
+                $high = 102.0;
+                $low = 85.0;
+                $close = 92.0;
+            }
+
+            if ($index === 25) {
+                $open = 116.0;
+                $high = 125.0;
+                $low = 110.0;
+                $close = 115.0;
+            }
+
+            if ($index === 27) {
+                $open = 95.0;
+                $high = 100.0;
+                $low = 79.0;
+                $close = 80.0;
+            }
+
             $klines[] = [
-                1_700_000_000_000 + ($index * 60_000),
-                '105',
-                '110',
-                '100',
-                '106',
+                $openTime,
+                (string) $open,
+                (string) $high,
+                (string) $low,
+                (string) $close,
                 '1000',
             ];
         }
-
-        $klines[] = [
-            1_700_000_000_000 + (29 * 60_000),
-            '100.5',
-            '108',
-            '99',
-            '101',
-            '1800',
-        ];
-
-        return $klines;
-    }
-
-    /**
-     * @return array<int, array<int, string|int>>
-     */
-    private function entryKlines(): array
-    {
-        $klines = [];
-
-        for ($index = 0; $index < 27; $index++) {
-            $klines[] = [
-                1_700_100_000_000 + ($index * 60_000),
-                '104',
-                '109',
-                '101',
-                '105',
-                '900',
-            ];
-        }
-
-        $klines[] = [1_700_100_000_000 + (27 * 60_000), '104', '106', '100', '101', '950'];
-        $klines[] = [1_700_100_000_000 + (28 * 60_000), '101', '107', '100', '106', '1000'];
-        $klines[] = [1_700_100_000_000 + (29 * 60_000), '109', '114', '108', '112', '1500'];
 
         return $klines;
     }

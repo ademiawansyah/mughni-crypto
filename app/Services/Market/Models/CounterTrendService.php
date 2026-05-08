@@ -19,9 +19,11 @@ class CounterTrendService
 
     private const MAX_RESULTS = 10;
 
-    private const STRUCTURE_LIMIT = 120;
+    private const STRUCTURE_LIMIT = 100;
 
-    private const ENTRY_LIMIT = 120;
+    private const ENTRY_LIMIT = 100;
+
+    private const MACRO_LIMIT = 10;
 
     private const SCORE_SWEEP = 40;
 
@@ -32,8 +34,6 @@ class CounterTrendService
     private const SCORE_OI = 8;
 
     private const SCORE_FUNDING = 7;
-
-    private const SCORE_MAX = 100;
 
     public function __construct(
         private readonly MarketRegimeService $marketRegimeService,
@@ -59,6 +59,7 @@ class CounterTrendService
         ?string $executionId = null,
         string $structureTimeframe = '1h',
         string $entryTimeframe = '15m',
+        string $macroTimeframe = '1d',
     ): array {
         $resolvedExecutionId = $executionId ?: Str::uuid()->toString();
 
@@ -66,6 +67,7 @@ class CounterTrendService
             'execution_id' => $resolvedExecutionId,
             'structure_timeframe' => $structureTimeframe,
             'entry_timeframe' => $entryTimeframe,
+            'macro_timeframe' => $macroTimeframe,
         ]);
 
         $candidates = $this->filterCoins();
@@ -79,13 +81,7 @@ class CounterTrendService
                 limit: self::STRUCTURE_LIMIT,
             );
 
-            $entryKlines = $this->fetchAndStoreOhlcv(
-                coin: $coin,
-                timeframe: $entryTimeframe,
-                limit: self::ENTRY_LIMIT,
-            );
-
-            if ($structureKlines === [] || $entryKlines === []) {
+            if ($structureKlines === []) {
                 Log::warning('[CounterTrendService] Skipped coin due to missing OHLCV', [
                     'execution_id' => $resolvedExecutionId,
                     'symbol' => $coin->symbol,
@@ -103,9 +99,20 @@ class CounterTrendService
             $analysis = $this->analyzeCoin(
                 symbol: $coin->symbol,
                 structureKlines: $structureKlines,
-                entryKlines: $entryKlines,
+                entryKlines: $this->fetchAndStoreOhlcv(
+                    coin: $coin,
+                    timeframe: $entryTimeframe,
+                    limit: self::ENTRY_LIMIT,
+                ),
+                macroKlines: $this->fetchAndStoreOhlcv(
+                    coin: $coin,
+                    timeframe: $macroTimeframe,
+                    limit: self::MACRO_LIMIT,
+                ),
+                currentPrice: $coin->current_price,
                 structureTimeframe: $structureTimeframe,
                 entryTimeframe: $entryTimeframe,
+                macroTimeframe: $macroTimeframe,
             );
 
             if ($analysis['signal'] === null) {
@@ -148,6 +155,7 @@ class CounterTrendService
             'version' => self::MODEL_VERSION,
             'timestamp' => $timestamp,
             'execution_date' => $executionDate,
+            'signal_count' => count($ranked),
             'results' => $ranked,
         ];
 
@@ -159,6 +167,7 @@ class CounterTrendService
             'requested_timeframes' => [
                 'structure' => $structureTimeframe,
                 'entry' => $entryTimeframe,
+                'macro' => $macroTimeframe,
             ],
             'all_scored_results' => $signals,
             'failed_coins' => $failedCoins,
@@ -202,13 +211,11 @@ class CounterTrendService
      */
     private function fetchAndStoreOhlcv(Coin $coin, string $timeframe, int $limit): array
     {
-        $klines = $this->marketRegimeService->getOhlcvDataForCoin(
+        return $this->marketRegimeService->getOhlcvDataForCoin(
             $coin->symbol,
             $timeframe,
             $limit,
         );
-
-        return $klines;
     }
 
     /**
@@ -228,7 +235,6 @@ class CounterTrendService
 
     /**
      * @param  array<int, array<int, mixed>>  $structureKlines
-     * @param  array<int, array<int, mixed>>  $entryKlines
      * @return array{
      *   signal: array<string, mixed>|null,
      *   rejection_reason: string|null,
@@ -239,37 +245,30 @@ class CounterTrendService
         string $symbol,
         array $structureKlines,
         array $entryKlines,
+        array $macroKlines,
+        ?float $currentPrice,
         string $structureTimeframe,
         string $entryTimeframe,
+        string $macroTimeframe,
     ): array {
-        $structureCandles = $this->mapKlinesToCandles($structureKlines);
+        $candles = $this->mapKlinesToCandles($structureKlines);
         $entryCandles = $this->mapKlinesToCandles($entryKlines);
+        $macroCandles = $this->mapKlinesToCandles($macroKlines);
 
-        if (count($structureCandles) < 30) {
+        if (count($candles) < 20) {
             return [
                 'signal' => null,
                 'rejection_reason' => 'insufficient_structure_candles',
                 'rejection_context' => [
-                    'required' => 30,
-                    'actual' => count($structureCandles),
+                    'required' => 20,
+                    'actual' => count($candles),
                 ],
             ];
         }
 
-        if (count($entryCandles) < 30) {
-            return [
-                'signal' => null,
-                'rejection_reason' => 'insufficient_entry_candles',
-                'rejection_context' => [
-                    'required' => 30,
-                    'actual' => count($entryCandles),
-                ],
-            ];
-        }
+        $sweep = $this->detectLiquiditySweep($candles);
 
-        $sweep = $this->detectLiquiditySweep($structureCandles);
-
-        if (! $sweep['confirmed']) {
+        if (! $sweep['detected']) {
             return [
                 'signal' => null,
                 'rejection_reason' => 'sweep_not_confirmed',
@@ -279,9 +278,13 @@ class CounterTrendService
             ];
         }
 
-        $mss = $this->detectMarketStructureShift($entryCandles, $sweep['direction']);
+        $mss = $this->detectMarketStructureShift(
+            candles: $candles,
+            sweepCandleIndex: $sweep['candle_index'],
+            sweepDirection: $sweep['direction'],
+        );
 
-        if (! $mss) {
+        if (! $mss['detected']) {
             return [
                 'signal' => null,
                 'rejection_reason' => 'mss_not_confirmed',
@@ -291,60 +294,88 @@ class CounterTrendService
             ];
         }
 
-        $hasEntryZone = $this->hasEntryZoneFromFvgOrOrderBlock($entryCandles, $sweep['direction']);
+        $macroAligned = $this->isMacroAligned($macroCandles, $sweep['direction']);
+
+        if (! $macroAligned) {
+            return [
+                'signal' => null,
+                'rejection_reason' => 'macro_opposes_sweep',
+                'rejection_context' => [
+                    'direction' => $sweep['direction'],
+                ],
+            ];
+        }
+
+        $fvg = count($entryCandles) >= 5
+            ? $this->detectFvgOrOrderBlock($entryCandles)
+            : [
+                'detected' => false,
+                'zone_high' => null,
+                'zone_low' => null,
+            ];
 
         $futuresSymbol = strtoupper($symbol) . 'USDT';
         $oiDecline = $this->detectOiDecline($futuresSymbol);
         $fundingExtreme = $this->detectExtremeFundingRate($futuresSymbol);
 
-        $sweepScore = self::SCORE_SWEEP;
-        $mssScore = self::SCORE_MSS;
-        $entryZoneScore = $hasEntryZone ? self::SCORE_ENTRY_ZONE : 0;
-        $oiScore = $oiDecline ? self::SCORE_OI : 0;
-        $fundingScore = $fundingExtreme ? self::SCORE_FUNDING : 0;
-        $totalScoreRaw = $sweepScore + $mssScore + $entryZoneScore + $oiScore + $fundingScore;
-        $totalScoreNormalized = (int) round(($totalScoreRaw / self::SCORE_MAX) * 100);
+        $score = self::SCORE_SWEEP + self::SCORE_MSS;
+        $score += $fvg['detected'] ? self::SCORE_ENTRY_ZONE : 0;
+        $score += $oiDecline ? self::SCORE_OI : 0;
+        $score += $fundingExtreme ? self::SCORE_FUNDING : 0;
 
-        $lastCandle = $entryCandles[array_key_last($entryCandles)];
-        $currentPrice = (float) $lastCandle['close'];
+        $sweepCandle = $candles[$sweep['candle_index']];
+        $stopLoss = $sweep['direction'] === 'bullish'
+            ? (float) $sweepCandle['low']
+            : (float) $sweepCandle['high'];
 
         return [
             'signal' => [
                 'symbol' => $futuresSymbol,
-                'price' => round($currentPrice, 8),
-                'total_score' => $totalScoreNormalized,
+                'price' => $currentPrice,
+                'total_score' => $score,
                 'components' => [
-                    'liquidity_sweep' => $sweep['confirmed'],
-                    'mss' => $mss,
-                    'fvg_or_ob' => $hasEntryZone,
-                    'oi_decline' => $oiDecline,
-                    'funding_extreme' => $fundingExtreme,
-                    'score_breakdown' => [
-                        'sweep' => $sweepScore,
-                        'mss' => $mssScore,
-                        'fvg_or_ob' => $entryZoneScore,
-                        'oi' => $oiScore,
-                        'funding' => $fundingScore,
-                        'total_raw' => $totalScoreRaw,
-                        'total_normalized' => $totalScoreNormalized,
-                        'max_score' => self::SCORE_MAX,
-                    ],
+                    'liquidity_sweep' => $sweep['direction'],
+                    'liquidity_sweep_level' => $sweep['level'],
+                    'mss' => $mss['direction'],
+                    'fvg_ob_15m' => $fvg['detected'],
+                    'oi_declining' => $oiDecline,
+                    'extreme_funding' => $fundingExtreme,
                 ],
                 'metadata' => [
-                    'strategy' => 'counter_trend',
-                    'direction' => $sweep['direction'],
-                    'entry_timeframe' => strtoupper($entryTimeframe),
                     'structure_timeframe' => strtoupper($structureTimeframe),
-                    'reason' => sprintf(
-                        'Sweep %s + MSS confirmed%s',
-                        $sweep['direction'],
-                        $hasEntryZone ? ' + entry zone' : ''
-                    ),
+                    'entry_timeframe' => strtoupper($entryTimeframe),
+                    'macro_timeframe' => strtoupper($macroTimeframe),
+                    'macro_aligned' => $macroAligned,
+                    'stop_loss' => $stopLoss,
+                    'fvg_zone_15m' => $fvg['detected']
+                        ? sprintf('%.6f-%.6f', $fvg['zone_low'], $fvg['zone_high'])
+                        : null,
                 ],
             ],
             'rejection_reason' => null,
             'rejection_context' => [],
         ];
+    }
+
+    /**
+     * @param  array<int, array{open_time: int, open: float, high: float, low: float, close: float, volume: float}>  $candles
+     */
+    private function isMacroAligned(array $candles, string $sweepDirection): bool
+    {
+        if (count($candles) < 2) {
+            return true;
+        }
+
+        $lastCandle = $candles[array_key_last($candles)];
+        $dailyBody = $lastCandle['close'] - $lastCandle['open'];
+        $dailyRange = max($lastCandle['high'] - $lastCandle['low'], 1e-12);
+        $opposingBodyStrength = abs($dailyBody) / $dailyRange;
+
+        if ($sweepDirection === 'bullish') {
+            return ! ($dailyBody < 0.0 && $opposingBodyStrength >= 0.6);
+        }
+
+        return ! ($dailyBody > 0.0 && $opposingBodyStrength >= 0.6);
     }
 
     /**
@@ -379,167 +410,248 @@ class CounterTrendService
 
     /**
      * @param  array<int, array{open_time: int, open: float, high: float, low: float, close: float, volume: float}>  $candles
-     * @return array{confirmed: bool, direction: string}
+     * @return array{0: array<int, array{index: int, price: float}>, 1: array<int, array{index: int, price: float}>}
      */
-    private function detectLiquiditySweep(array $candles): array
+    private function findSwingPoints(array $candles, int $lookback = 5): array
     {
-        $lastIndex = array_key_last($candles);
+        $swingHighs = [];
+        $swingLows = [];
+        $count = count($candles);
 
-        if ($lastIndex === null || $lastIndex < 21) {
-            return ['confirmed' => false, 'direction' => 'none'];
-        }
+        for ($i = $lookback; $i < $count - $lookback; $i++) {
+            $high = $candles[$i]['high'];
+            $low = $candles[$i]['low'];
+            $isSwingHigh = true;
+            $isSwingLow = true;
 
-        $last = $candles[$lastIndex];
-        $lookback = array_slice($candles, -22, 21);
+            for ($j = $i - $lookback; $j <= $i + $lookback; $j++) {
+                if ($j === $i) {
+                    continue;
+                }
 
-        $recentHigh = max(array_column($lookback, 'high'));
-        $recentLow = min(array_column($lookback, 'low'));
+                if ($candles[$j]['high'] >= $high) {
+                    $isSwingHigh = false;
+                }
 
-        $sweptHigh = $last['high'] > $recentHigh && $last['close'] < $recentHigh;
-        $sweptLow = $last['low'] < $recentLow && $last['close'] > $recentLow;
+                if ($candles[$j]['low'] <= $low) {
+                    $isSwingLow = false;
+                }
 
-        if ($sweptLow) {
-            return ['confirmed' => true, 'direction' => 'bullish'];
-        }
-
-        if ($sweptHigh) {
-            return ['confirmed' => true, 'direction' => 'bearish'];
-        }
-
-        return ['confirmed' => false, 'direction' => 'none'];
-    }
-
-    /**
-     * @param  array<int, array{open_time: int, open: float, high: float, low: float, close: float, volume: float}>  $candles
-     */
-    private function detectMarketStructureShift(array $candles, string $direction): bool
-    {
-        $lastIndex = array_key_last($candles);
-
-        if ($lastIndex === null || $lastIndex < 21) {
-            return false;
-        }
-
-        $last = $candles[$lastIndex];
-        $lookback = array_slice($candles, -22, 21);
-        $recentHigh = max(array_column($lookback, 'high'));
-        $recentLow = min(array_column($lookback, 'low'));
-
-        if ($direction === 'bullish') {
-            return $last['close'] > $recentHigh;
-        }
-
-        if ($direction === 'bearish') {
-            return $last['close'] < $recentLow;
-        }
-
-        return false;
-    }
-
-    /**
-     * @param  array<int, array{open_time: int, open: float, high: float, low: float, close: float, volume: float}>  $candles
-     */
-    private function hasEntryZoneFromFvgOrOrderBlock(array $candles, string $direction): bool
-    {
-        if (count($candles) < 6) {
-            return false;
-        }
-
-        $latest = $candles[array_key_last($candles)];
-        $currentClose = (float) $latest['close'];
-
-        $fvgFound = false;
-        for ($i = count($candles) - 1; $i >= max(2, count($candles) - 15); $i--) {
-            $left = $candles[$i - 2];
-            $right = $candles[$i];
-
-            if ($direction === 'bullish' && $left['high'] < $right['low']) {
-                $fvgFound = true;
-
-                break;
-            }
-
-            if ($direction === 'bearish' && $left['low'] > $right['high']) {
-                $fvgFound = true;
-
-                break;
-            }
-        }
-
-        $obFound = false;
-        $recentCandles = array_slice($candles, -10);
-
-        foreach ($recentCandles as $candle) {
-            $body = abs($candle['close'] - $candle['open']);
-            $range = max(0.00000001, $candle['high'] - $candle['low']);
-            $bodyRatio = $body / $range;
-
-            if ($direction === 'bullish' && $candle['close'] < $candle['open'] && $bodyRatio >= 0.5) {
-                if ($currentClose >= $candle['low'] && $currentClose <= $candle['high']) {
-                    $obFound = true;
-
+                if (! $isSwingHigh && ! $isSwingLow) {
                     break;
                 }
             }
 
-            if ($direction === 'bearish' && $candle['close'] > $candle['open'] && $bodyRatio >= 0.5) {
-                if ($currentClose >= $candle['low'] && $currentClose <= $candle['high']) {
-                    $obFound = true;
+            if ($isSwingHigh) {
+                $swingHighs[] = ['index' => $i, 'price' => $high];
+            }
 
-                    break;
+            if ($isSwingLow) {
+                $swingLows[] = ['index' => $i, 'price' => $low];
+            }
+        }
+
+        return [$swingHighs, $swingLows];
+    }
+
+    /**
+     * @param  array<int, array{open_time: int, open: float, high: float, low: float, close: float, volume: float}>  $candles
+     * @return array{detected: bool, direction: string|null, level: float|null, candle_index: int|null}
+     */
+    private function detectLiquiditySweep(array $candles, int $scanRecent = 10): array
+    {
+        if (count($candles) < 20) {
+            return [
+                'detected' => false,
+                'direction' => null,
+                'level' => null,
+                'candle_index' => null,
+            ];
+        }
+
+        $count = count($candles);
+        $start = max($count - $scanRecent, 10);
+
+        for ($i = $count - 1; $i >= $start; $i--) {
+            $reference = array_slice($candles, 0, $i);
+            [$swingHighs, $swingLows] = $this->findSwingPoints($reference, 5);
+            $candle = $candles[$i];
+
+            if ($swingHighs !== []) {
+                $level = $swingHighs[array_key_last($swingHighs)]['price'];
+                if ($candle['high'] > $level && $candle['close'] < $level) {
+                    return [
+                        'detected' => true,
+                        'direction' => 'bearish',
+                        'level' => $level,
+                        'candle_index' => $i,
+                    ];
+                }
+            }
+
+            if ($swingLows !== []) {
+                $level = $swingLows[array_key_last($swingLows)]['price'];
+                if ($candle['low'] < $level && $candle['close'] > $level) {
+                    return [
+                        'detected' => true,
+                        'direction' => 'bullish',
+                        'level' => $level,
+                        'candle_index' => $i,
+                    ];
                 }
             }
         }
 
-        return $fvgFound || $obFound;
+        return [
+            'detected' => false,
+            'direction' => null,
+            'level' => null,
+            'candle_index' => null,
+        ];
     }
 
     /**
-     * Detect whether open interest declined ≥5% over the recent period,
-     * indicating exhaustion concurrent with the liquidity sweep.
-     *
-     * Uses Binance Futures /fapi/v1/openInterestHist (1H period, last 5 snapshots).
-     * Returns false when futures data is unavailable (graceful degradation).
+     * @param  array<int, array{open_time: int, open: float, high: float, low: float, close: float, volume: float}>  $candles
+     * @return array{detected: bool, direction: string|null}
      */
+    private function detectMarketStructureShift(array $candles, ?int $sweepCandleIndex, ?string $sweepDirection): array
+    {
+        if ($sweepCandleIndex === null || $sweepDirection === null) {
+            return [
+                'detected' => false,
+                'direction' => null,
+            ];
+        }
+
+        $reference = array_slice($candles, 0, $sweepCandleIndex);
+
+        if (count($reference) < 10) {
+            return [
+                'detected' => false,
+                'direction' => null,
+            ];
+        }
+
+        [$swingHighs, $swingLows] = $this->findSwingPoints($reference, 5);
+
+        for ($i = $sweepCandleIndex + 1; $i < count($candles); $i++) {
+            $candle = $candles[$i];
+
+            if ($sweepDirection === 'bullish' && $swingHighs !== []) {
+                $lastSwingHigh = $swingHighs[array_key_last($swingHighs)]['price'];
+                if ($candle['close'] > $lastSwingHigh) {
+                    return [
+                        'detected' => true,
+                        'direction' => 'bullish',
+                    ];
+                }
+            }
+
+            if ($sweepDirection === 'bearish' && $swingLows !== []) {
+                $lastSwingLow = $swingLows[array_key_last($swingLows)]['price'];
+                if ($candle['close'] < $lastSwingLow) {
+                    return [
+                        'detected' => true,
+                        'direction' => 'bearish',
+                    ];
+                }
+            }
+        }
+
+        return [
+            'detected' => false,
+            'direction' => null,
+        ];
+    }
+
+    /**
+     * @param  array<int, array{open_time: int, open: float, high: float, low: float, close: float, volume: float}>  $candles
+     * @return array{detected: bool, zone_high: float|null, zone_low: float|null}
+     */
+    private function detectFvgOrOrderBlock(array $candles): array
+    {
+        if (count($candles) < 5) {
+            return [
+                'detected' => false,
+                'zone_high' => null,
+                'zone_low' => null,
+            ];
+        }
+
+        $lastPrice = $candles[array_key_last($candles)]['close'];
+        $searchStart = max(0, count($candles) - 22);
+
+        for ($i = $searchStart; $i < count($candles) - 2; $i++) {
+            $c1 = $candles[$i];
+            $c3 = $candles[$i + 2];
+
+            if ($c1['high'] < $c3['low']) {
+                $zoneLow = $c1['high'];
+                $zoneHigh = $c3['low'];
+                if ($zoneLow <= $lastPrice && $lastPrice <= $zoneHigh) {
+                    return [
+                        'detected' => true,
+                        'zone_high' => $zoneHigh,
+                        'zone_low' => $zoneLow,
+                    ];
+                }
+            }
+
+            if ($c1['low'] > $c3['high']) {
+                $zoneLow = $c3['high'];
+                $zoneHigh = $c1['low'];
+                if ($zoneLow <= $lastPrice && $lastPrice <= $zoneHigh) {
+                    return [
+                        'detected' => true,
+                        'zone_high' => $zoneHigh,
+                        'zone_low' => $zoneLow,
+                    ];
+                }
+            }
+        }
+
+        return [
+            'detected' => false,
+            'zone_high' => null,
+            'zone_low' => null,
+        ];
+    }
+
     private function detectOiDecline(string $futuresSymbol): bool
     {
-        $history = $this->marketRegimeService->getOpenInterestHistoryForCoin(
+        $history = $this->marketRegimeService->getCounterTrendOpenInterestHistoryForCoin(
             symbol: $futuresSymbol,
-            period: '1h',
-            limit: 5,
+            interval: '1hour',
+            limit: 24,
         );
 
-        if ($history === null || count($history) < 2) {
+        if (count($history) < 2) {
             return false;
         }
 
-        $earliest = $history[0]['sumOpenInterest'];
-        $latest = $history[array_key_last($history)]['sumOpenInterest'];
+        $prior = $history[count($history) - 2]['open_interest'];
+        $recent = $history[array_key_last($history)]['open_interest'];
 
-        if ($earliest <= 0.0) {
+        if ($prior <= 0.0) {
             return false;
         }
 
-        // Require ≥5% OI decline to qualify as exhaustion confirmation
-        return ($earliest - $latest) / $earliest >= 0.05;
+        return (($prior - $recent) / $prior) >= 0.05;
     }
 
-    /**
-     * Detect whether the current funding rate is extreme (< -0.1% or > +0.1%),
-     * indicating one-sided positioning that supports a reversal.
-     *
-     * Uses Binance Futures /fapi/v1/fundingRate.
-     * Returns false when futures data is unavailable (graceful degradation).
-     */
     private function detectExtremeFundingRate(string $futuresSymbol): bool
     {
-        $data = $this->marketRegimeService->getLatestFundingRateForCoin($futuresSymbol);
+        $history = $this->marketRegimeService->getCounterTrendFundingRateHistoryForCoin(
+            symbol: $futuresSymbol,
+            limit: 10,
+        );
 
-        if ($data === null) {
+        if ($history === []) {
             return false;
         }
 
-        // Threshold: |funding rate| > 0.001 (0.1% per 8H)
-        return abs($data['funding_rate']) > 0.001;
+        $latestRate = $history[array_key_last($history)]['funding_rate'];
+
+        return abs($latestRate) >= 0.001;
     }
 }

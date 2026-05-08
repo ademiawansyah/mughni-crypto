@@ -81,4 +81,12 @@ return [
         'cache_ttl_seconds' => (int) env('BINANCE_FUTURES_CACHE_TTL_SECONDS', 120),
     ],
 
+    'coinalyze' => [
+        'enabled' => (bool) env('COINALYZE_ENABLED', true),
+        'base_url' => env('COINALYZE_BASE_URL', 'https://api.coinalyze.net/v1'),
+        'api_key' => env('COINALYZE_API_KEY'),
+        'timeout' => (int) env('COINALYZE_TIMEOUT', 10),
+        'cache_ttl_seconds' => (int) env('COINALYZE_CACHE_TTL_SECONDS', 120),
+    ],
+
 ];

@@ -6,6 +6,7 @@ use App\Models\Coin;
 use App\Models\CoinMarketData;
 use App\Services\External\BinanceFuturesService;
 use App\Services\External\BinanceService;
+use App\Services\External\CoinalyzeService;
 use Illuminate\Support\Facades\Log;
 
 class MarketRegimeService
@@ -17,6 +18,7 @@ class MarketRegimeService
     public function __construct(
         private readonly BinanceService $binanceService,
         private readonly BinanceFuturesService $binanceFuturesService,
+        private readonly CoinalyzeService $coinalyzeService,
     ) {}
 
     /**
@@ -124,6 +126,75 @@ class MarketRegimeService
             interval: 'latest',
             payload: $funding,
         );
+
+        return $funding;
+    }
+
+    /**
+     * @return array<int, array{timestamp: int, open_interest: float}>
+     */
+    public function getCounterTrendOpenInterestHistoryForCoin(string $symbol, string $interval = '1hour', int $limit = 24): array
+    {
+        $normalizedSymbol = strtoupper($symbol);
+        $safeLimit = max(2, min($limit, 200));
+        $cacheKey = sprintf('market_regime:coinalyze:oi_history:%s:%s:%d', $normalizedSymbol, $interval, $safeLimit);
+        $cachedData = cache()->get($cacheKey);
+
+        if (is_array($cachedData)) {
+            return $cachedData;
+        }
+
+        $history = $this->coinalyzeService->fetchOpenInterestHistory(
+            binanceSymbol: $normalizedSymbol,
+            interval: $interval,
+            limit: $safeLimit,
+        );
+
+        cache()->put($cacheKey, $history, $this->getFuturesCacheTtlSeconds());
+
+        if ($history !== []) {
+            $this->persistMarketData(
+                symbol: $normalizedSymbol,
+                dataType: 'oi_history',
+                source: 'coinalyze',
+                interval: $interval,
+                payload: $history,
+            );
+        }
+
+        return $history;
+    }
+
+    /**
+     * @return array<int, array{timestamp: int, funding_rate: float}>
+     */
+    public function getCounterTrendFundingRateHistoryForCoin(string $symbol, int $limit = 10): array
+    {
+        $normalizedSymbol = strtoupper($symbol);
+        $safeLimit = max(1, min($limit, 120));
+        $cacheKey = sprintf('market_regime:coinalyze:funding_rate:%s:%d', $normalizedSymbol, $safeLimit);
+        $cachedData = cache()->get($cacheKey);
+
+        if (is_array($cachedData)) {
+            return $cachedData;
+        }
+
+        $funding = $this->coinalyzeService->fetchFundingRateHistory(
+            binanceSymbol: $normalizedSymbol,
+            limit: $safeLimit,
+        );
+
+        cache()->put($cacheKey, $funding, $this->getFuturesCacheTtlSeconds());
+
+        if ($funding !== []) {
+            $this->persistMarketData(
+                symbol: $normalizedSymbol,
+                dataType: 'funding_rate',
+                source: 'coinalyze',
+                interval: 'daily',
+                payload: $funding,
+            );
+        }
 
         return $funding;
     }
