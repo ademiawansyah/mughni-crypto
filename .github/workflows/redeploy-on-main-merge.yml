@@ -11,68 +11,56 @@ concurrency:
 
 jobs:
   redeploy:
-    name: Trigger deployment webhook
+    name: Deploy over SSH
     runs-on: ubuntu-latest
     if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
 
     steps:
-      - name: Send signed deploy webhook
+      - name: Configure SSH
         env:
-          DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
-          DEPLOY_WEBHOOK_SECRET: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}
-          MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-          REPOSITORY_FULL_NAME: ${{ github.repository }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
 
-          if [[ -z "${DEPLOY_WEBHOOK_URL}" ]]; then
-            echo "Missing DEPLOY_WEBHOOK_URL secret"
+          if [[ -z "${SSH_HOST}" ]]; then
+            echo "Missing SSH_HOST secret"
             exit 1
           fi
 
-          if [[ -z "${DEPLOY_WEBHOOK_SECRET}" ]]; then
-            echo "Missing DEPLOY_WEBHOOK_SECRET secret"
+          if [[ -z "${SSH_USER}" ]]; then
+            echo "Missing SSH_USER secret"
             exit 1
           fi
 
-          payload="$(jq -cn \
-            --arg ref "refs/heads/main" \
-            --arg after "${MERGE_COMMIT_SHA}" \
-            --arg repository "${REPOSITORY_FULL_NAME}" \
-            '{
-              ref: $ref,
-              after: $after,
-              repository: {
-                full_name: $repository
-              }
-            }')"
-
-          payload_sha256="$(printf '%s' "${payload}" | sha256sum | awk '{print $1}')"
-          secret_length="$(printf '%s' "${DEPLOY_WEBHOOK_SECRET}" | wc -c | awk '{print $1}')"
-          webhook_host="$(printf '%s\n' "${DEPLOY_WEBHOOK_URL}" | sed -E 's#^(https?://[^/]+).*$#\1#')"
-
-          echo "::notice::Webhook target=${webhook_host}"
-          echo "::notice::Merge commit=${MERGE_COMMIT_SHA}"
-          echo "::notice::Repository=${REPOSITORY_FULL_NAME}"
-          echo "::notice::Secret length=${secret_length}"
-          echo "::notice::Payload sha256=${payload_sha256}"
-
-          signature="sha256=$(printf '%s' "${payload}" | openssl dgst -sha256 -hmac "${DEPLOY_WEBHOOK_SECRET}" | awk '{print $2}')"
-
-          response_code="$(
-            curl --silent --show-error --output /tmp/deploy-webhook-response.txt --write-out '%{http_code}' \
-            -X POST \
-            -H "Content-Type: application/json" \
-            -H "X-GitHub-Event: push" \
-            -H "X-Hub-Signature-256: ${signature}" \
-            -d "${payload}" \
-            "${DEPLOY_WEBHOOK_URL}"
-          )"
-
-          echo "::notice::Webhook response code=${response_code}"
-
-          if [[ "${response_code}" -ge 400 ]]; then
-            echo "Webhook request failed"
-            cat /tmp/deploy-webhook-response.txt
+          if [[ -z "${SSH_PRIVATE_KEY}" ]]; then
+            echo "Missing SSH_PRIVATE_KEY secret"
             exit 1
           fi
+
+          mkdir -p "${HOME}/.ssh"
+          chmod 700 "${HOME}/.ssh"
+          printf '%s' "${SSH_PRIVATE_KEY}" > "${HOME}/.ssh/id_ed25519"
+          chmod 600 "${HOME}/.ssh/id_ed25519"
+
+          if [[ -n "${SSH_KNOWN_HOSTS}" ]]; then
+            printf '%s\n' "${SSH_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
+          else
+            ssh-keyscan -p "${SSH_PORT:-22}" "${SSH_HOST}" > "${HOME}/.ssh/known_hosts"
+          fi
+
+          chmod 600 "${HOME}/.ssh/known_hosts"
+
+      - name: Pull latest code and refresh services
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          set -euo pipefail
+
+          ssh -i "${HOME}/.ssh/id_ed25519" -p "${SSH_PORT:-22}" "${SSH_USER}@${SSH_HOST}" \
+            'set -euo pipefail && cd /home/edualima/code/mughni-crypto && git pull --ff-only origin main && make refresh'

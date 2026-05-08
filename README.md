@@ -99,23 +99,23 @@ GITHUB_DEPLOY_SCRIPT_TIMEOUT=600
 ### 3a) Auto redeploy after a pull request is merged into `main`
 
 This repository includes a GitHub Actions workflow at `.github/workflows/redeploy-on-main-merge.yml`.
-It runs only when a pull request is **merged** into `main`, then sends a signed `push`-style payload to the existing Laravel webhook endpoint.
+It runs only when a pull request is **merged** into `main`, then connects to the server over SSH and runs:
+
+```bash
+cd /home/edualima/code/mughni-crypto
+git pull --ff-only origin main
+make refresh
+```
 
 Add these repository secrets in GitHub:
 
-- `DEPLOY_WEBHOOK_URL` → example: `https://mughni-crypto.web.id/webhook/github`
-- `DEPLOY_WEBHOOK_SECRET` → must match the server-side `GITHUB_WEBHOOK_SECRET`
+- `SSH_HOST` → server hostname or IP
+- `SSH_USER` → SSH username
+- `SSH_PRIVATE_KEY` → private key allowed to access the server
+- `SSH_PORT` → optional, defaults to `22`
+- `SSH_KNOWN_HOSTS` → optional, recommended for strict host verification
 
-The application still enforces:
-
-- branch matches `GITHUB_DEPLOY_BRANCH`
-- repository matches `GITHUB_DEPLOY_REPOSITORY` (if set)
-- signature matches `GITHUB_WEBHOOK_SECRET`
-
-The app verifies:
-- `X-Hub-Signature-256`
-- Push branch matches `GITHUB_DEPLOY_BRANCH`
-- Repository matches `GITHUB_DEPLOY_REPOSITORY` (if set)
+The Laravel webhook deploy endpoint remains available if you still want to trigger deployments manually.
 
 ### 4) Manual deploy script execution in app container
 
