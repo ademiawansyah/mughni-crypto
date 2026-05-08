@@ -90,7 +90,7 @@ Schedule::job(new PrePumpJob)
 
 /**
  * ============================================================================
- * MODEL 3: TREND MOMENTUM (Every 15 minutes)
+ * MODEL 3: TREND MOMENTUM (Every 4 hours)
  * ============================================================================
  * Runs independent Model 3 scanning pipeline using cached/shared market data.
  */
