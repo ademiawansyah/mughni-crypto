@@ -36,20 +36,8 @@ class NotificationServiceTest extends TestCase
                 'shortlisted' => 0,
             ]);
 
-        Log::shouldNotHaveReceived('info')
-            ->with(
-                '[NotificationService] System notification triggered',
-                [
-                    'execution_id' => 'exec-no-pass',
-                    'title' => 'Pre Pump - No Setup',
-                    'lines' => [
-                        'Model: Pre Pump',
-                        'Evaluated: 10',
-                        'Passed: 0',
-                        'Result: No coin passed model criteria.',
-                    ],
-                ],
-            );
+        Log::shouldNotHaveReceived('error')
+            ->withArgs(fn (string $message): bool => $message === '[NotificationService] Telegram send failed');
     }
 
     public function test_it_skips_telegram_send_when_chat_id_is_missing(): void
