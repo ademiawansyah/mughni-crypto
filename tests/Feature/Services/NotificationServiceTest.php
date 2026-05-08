@@ -36,10 +36,11 @@ class NotificationServiceTest extends TestCase
                 'shortlisted' => 0,
             ]);
 
-        Log::shouldNotHaveReceived('warning', [
-            '[NotificationService] Telegram chat ID is not configured, skipping send',
-            ['execution_id' => 'exec-no-pass'],
-        ]);
+        Log::shouldNotHaveReceived('warning')
+            ->with(
+                '[NotificationService] Telegram chat ID is not configured, skipping send',
+                ['execution_id' => 'exec-no-pass'],
+            );
     }
 
     public function test_it_skips_telegram_send_when_chat_id_is_missing(): void
