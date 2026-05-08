@@ -43,15 +43,11 @@ class NotificationService
         $modelDisplayName = $this->formatModelName($model);
 
         if ($results === [] || $shortlisted === 0) {
-            $this->sendSystemMessage([
+            Log::info('[NotificationService] Skipping model execution notification because no coin passed', [
                 'execution_id' => $executionId,
-                'title' => sprintf('%s - No Setup', $modelDisplayName),
-                'lines' => [
-                    sprintf('Model: %s', $modelDisplayName),
-                    sprintf('Evaluated: %d', $evaluated),
-                    'Passed: 0',
-                    'Result: No coin passed model criteria.',
-                ],
+                'model' => $model,
+                'evaluated' => $evaluated,
+                'shortlisted' => $shortlisted,
             ]);
 
             return;
