@@ -20,25 +20,30 @@ class PrePumpService
 
     private const MAX_RESULTS = 10;
 
-    /**
-     * 4H candles to fetch: ~33 days of data for ATR 30-day baseline.
-     */
-    private const STRUCTURE_LIMIT = 200;
+    /** 4H candles to fetch (~36 days). Python fetches 220. */
+    private const STRUCTURE_LIMIT = 220;
 
-    /**
-     * 1H candles to fetch: ~5 days for entry signals (RS, CVD).
-     */
-    private const ENTRY_LIMIT = 120;
+    /** Minimum 4H candles required for analysis (Python: len < 180 → skip). */
+    private const MIN_STRUCTURE_CANDLES = 180;
 
-    /**
-     * ATR short-period (spec: ATR 14).
-     */
+    /** Scoring weights — additive integer model matching Python exactly. */
+    private const SCORE_FUNDING = 35;
+
+    private const SCORE_OI_PRICE = 25;
+
+    private const SCORE_ATR = 20;
+
+    private const SCORE_CVD = 12;
+
+    private const SCORE_RSI = 8;
+
+    /** ATR short-period (spec: ATR 14 on 4H candles). */
     private const ATR_PERIOD = 14;
 
-    /**
-     * ATR baseline look-back window (up to 90 ATR values ≈ 30 days on 4H).
-     */
-    private const ATR_BASELINE_PERIOD = 90;
+    /** Candle window for the 30-day ATR baseline (Python: candles[-180:], period=30). */
+    private const ATR_BASELINE_WINDOW = 180;
+
+    private const ATR_BASELINE_PERIOD = 30;
 
     public function __construct(
         private readonly MarketRegimeService $marketRegimeService,
@@ -49,9 +54,8 @@ class PrePumpService
     /**
      * Execute Model 2 (Pre-Pump) scanning pipeline.
      *
-     * Fetches 4H OHLCV (structure) and 1H OHLCV (entry signals) for each
-     * candidate coin, runs five indicator-based component scorers, and
-     * persists the top-10 results via ModelOutputStoreService.
+     * Fetches 4H OHLCV for each Layer 3 candidate, runs boolean gate checks,
+     * accumulates additive scores, and persists top-10 results.
      *
      * @return array{
      *   execution_id: string,
@@ -67,7 +71,9 @@ class PrePumpService
     public function execute(?string $executionId = null): array
     {
         $resolvedExecutionId = $executionId ?: Str::uuid()->toString();
-        $minimumScore = (float) config('models.pre_pump.min_score', 65);
+
+        // min_score=1 matches Python "if score <= 0: return None"
+        $minimumScore = (int) config('models.pre_pump.min_score', 1);
 
         Log::info('[PrePumpService] Started execution', [
             'execution_id' => $resolvedExecutionId,
@@ -80,9 +86,8 @@ class PrePumpService
 
         foreach ($candidates as $coin) {
             $structureKlines = $this->fetchAndStoreOhlcv($coin, '4h', self::STRUCTURE_LIMIT);
-            $entryKlines = $this->fetchAndStoreOhlcv($coin, '1h', self::ENTRY_LIMIT);
 
-            if ($structureKlines === [] || $entryKlines === []) {
+            if ($structureKlines === []) {
                 Log::warning('[PrePumpService] Skipped coin due to missing OHLCV', [
                     'execution_id' => $resolvedExecutionId,
                     'symbol' => $coin->symbol,
@@ -100,7 +105,7 @@ class PrePumpService
                 continue;
             }
 
-            $analysis = $this->analyzeCoin($coin, $structureKlines, $entryKlines, $minimumScore);
+            $analysis = $this->analyzeCoin($coin, $structureKlines, $minimumScore);
 
             if ($analysis['signal'] === null) {
                 $failedCoins[] = [
@@ -192,6 +197,9 @@ class PrePumpService
 
     /**
      * Layer 3 candidate selection for Model 2.
+     *
+     * Keeps coins with is_valid=true, market_cap_rank 20–150, volume >= $10M.
+     * Matches Python filter_layer3() thresholds exactly.
      */
     private function filterCoins()
     {
@@ -206,122 +214,154 @@ class PrePumpService
     }
 
     /**
-     * Analyze a coin using real OHLCV-based Pre-Pump indicators.
+     * Run the full Pre-Pump analysis pipeline for one coin.
      *
-     * Components (config keys):
-     *   - funding (0.35): Persistent negative funding proxy from 4H candle sentiment
-     *   - atr_compression (0.25): ATR 14 vs 30-day baseline — volatility compression
-     *   - oi (0.20): OI accumulation proxy — volume rising while price sideways
-     *   - rs (0.10): Relative strength proxy — coin trend vs own prior trend
-     *   - cvd (0.10): CVD divergence — buy pressure rising while price flat/declining
+     * Gates applied in order:
+     *   1. Minimum candle count (< 180 → skip)
+     *   2. Funding gate — hard-reject if Coinalyze data available and funding is not negative
+     *   3. Score gate — reject if total_score < minimum_score
      *
-     * @param  array<int, array<int, mixed>>  $structureKlines  4H klines
-     * @param  array<int, array<int, mixed>>  $entryKlines  1H klines
-     * @return array{
-     *   signal: array<string, mixed>|null,
-     *   rejection_reason: string|null,
-     *   rejection_context: array<string, mixed>,
-     *   score: float
-     * }
+     * Component weights (additive):
+     *   - persistent_negative_funding  : 35
+     *   - oi_rising_price_sideways     : 25
+     *   - low_atr_compression          : 20
+     *   - cvd_quietly_rising           : 12
+     *   - rsi_compression              :  8
+     *
+     * Volume drying is computed and stored in metadata but is NOT weighted in the score.
+     *
+     * @param  array<int, array<int, mixed>>  $structureKlines  Raw Binance 4H klines
+     * @param  int  $minimumScore  Minimum total_score to pass (default 1 = any gate must fire)
+     * @return array{signal: array<string,mixed>|null, rejection_reason: string|null, rejection_context: array<string,mixed>, score: int}
      */
-    private function analyzeCoin(Coin $coin, array $structureKlines, array $entryKlines, float $minimumScore): array
+    private function analyzeCoin(Coin $coin, array $structureKlines, int $minimumScore): array
     {
-        $structureCandles = $this->mapKlinesToCandles($structureKlines);
-        $entryCandles = $this->mapKlinesToCandles($entryKlines);
+        $candles = $this->mapKlinesToCandles($structureKlines);
 
-        if (count($structureCandles) < 30) {
+        if (count($candles) < self::MIN_STRUCTURE_CANDLES) {
             return [
                 'signal' => null,
                 'rejection_reason' => 'insufficient_structure_candles',
                 'rejection_context' => [
-                    'required' => 30,
-                    'actual' => count($structureCandles),
+                    'required' => self::MIN_STRUCTURE_CANDLES,
+                    'actual' => count($candles),
                 ],
                 'score' => 0,
             ];
         }
 
-        if (count($entryCandles) < 24) {
+        $symbol = strtoupper($coin->symbol);
+        $pairSymbol = str_ends_with($symbol, 'USDT') ? $symbol : $symbol . 'USDT';
+
+        // --- Fetch Coinalyze derivative data and CoinGecko daily volumes ---
+        $fundingData = $this->marketRegimeService->getPrePumpFundingRateHistory($pairSymbol, 12);
+        $oiData = $this->marketRegimeService->getPrePumpOiHistory($pairSymbol, '4hour', 7);
+        $dailyVolumes = $this->marketRegimeService->getPrePumpDailyVolumes((string) ($coin->coin_gecko_id ?? ''), 8);
+
+        $coinalyzeAvailable = $fundingData !== [] || $oiData !== [];
+
+        // --- Gate 1: Funding squeeze gate ---
+        // If Coinalyze returned funding data and it is NOT persistently negative → hard-reject.
+        // If Coinalyze is unavailable → bypass gate (funding_gate_bypassed = true).
+        $fundingResult = $this->checkPersistentNegativeFunding($fundingData);
+        $fundingOk = $fundingResult['ok'];
+        $fundingGateBypassed = $fundingResult['bypassed'];
+
+        if (! $fundingOk && ! $fundingGateBypassed) {
             return [
                 'signal' => null,
-                'rejection_reason' => 'insufficient_entry_candles',
+                'rejection_reason' => 'funding_gate_failed',
                 'rejection_context' => [
-                    'required' => 24,
-                    'actual' => count($entryCandles),
+                    'funding_recent_8h' => $fundingResult['recent_8h'],
                 ],
                 'score' => 0,
             ];
         }
 
-        // Component scores (0–100 each), weighted per config
-        $fundingScore = $this->scoreFunding($structureCandles);
-        $atrCompressionScore = $this->scoreAtrCompression($structureCandles);
-        $oiScore = $this->scoreOiAccumulation($structureCandles);
-        $rsScore = $this->scoreRelativeStrength($entryCandles);
-        $cvdScore = $this->scoreCvdDivergence($entryCandles);
+        // --- Component checks ---
+        $priceRange24h = $this->calcPriceRange24h($candles);
+        $sideways = $priceRange24h !== null && $priceRange24h < 0.03;
 
-        $weights = [
-            'funding' => (float) config('models.pre_pump.scoring.funding', 0.35),
-            'atr_compression' => (float) config('models.pre_pump.scoring.atr_compression', 0.25),
-            'oi' => (float) config('models.pre_pump.scoring.oi', 0.20),
-            'rs' => (float) config('models.pre_pump.scoring.rs', 0.10),
-            'cvd' => (float) config('models.pre_pump.scoring.cvd', 0.10),
-        ];
+        $oiResult = $this->checkOiRising($oiData);
+        $oiRisingPriceSidewaysOk = $oiResult['ok'] && $sideways;
 
-        $componentScores = [
-            'funding' => $fundingScore,
-            'atr_compression' => $atrCompressionScore,
-            'oi' => $oiScore,
-            'rs' => $rsScore,
-            'cvd' => $cvdScore,
-        ];
+        $atrResult = $this->checkLowAtr($candles);
+        $atrOk = $atrResult['ok'];
 
-        $totalScore = round(
-            ($fundingScore * $weights['funding'])
-                + ($atrCompressionScore * $weights['atr_compression'])
-                + ($oiScore * $weights['oi'])
-                + ($rsScore * $weights['rs'])
-                + ($cvdScore * $weights['cvd']),
-            2,
-        );
+        $cvdResult = $this->checkCvdRising($candles);
+        $cvdOk = $cvdResult['ok'] && $sideways;
+
+        $rsiResult = $this->checkRsiCompression($candles);
+        $rsiOk = $rsiResult['ok'];
+
+        // Volume drying — informational only, not included in score (matching Python spec §5.5)
+        $volumeDryingResult = $this->checkVolumeDrying($coin, $dailyVolumes);
+
+        // --- Additive score ---
+        $totalScore = 0;
+        $totalScore += $fundingOk ? self::SCORE_FUNDING : 0;
+        $totalScore += $oiRisingPriceSidewaysOk ? self::SCORE_OI_PRICE : 0;
+        $totalScore += $atrOk ? self::SCORE_ATR : 0;
+        $totalScore += $cvdOk ? self::SCORE_CVD : 0;
+        $totalScore += $rsiOk ? self::SCORE_RSI : 0;
 
         Log::info('[PrePumpService] Analyzed coin', [
-            'symbol' => $coin->symbol,
+            'symbol' => $pairSymbol,
             'total_score' => $totalScore,
-            'components' => $componentScores,
+            'components' => [
+                'persistent_negative_funding' => $fundingOk,
+                'funding_gate_bypassed' => $fundingGateBypassed,
+                'oi_rising_price_sideways' => $oiRisingPriceSidewaysOk,
+                'low_atr_compression' => $atrOk,
+                'cvd_quietly_rising' => $cvdOk,
+                'rsi_compression' => $rsiOk,
+                'drying_volume' => $volumeDryingResult['ok'],
+            ],
         ]);
 
+        // Gate 2: Drop coins with no active signals (score > 0 required, matching Python)
         if ($totalScore < $minimumScore) {
             return [
                 'signal' => null,
-                'rejection_reason' => 'below_minimum_score',
+                'rejection_reason' => 'no_active_signals',
                 'rejection_context' => [
-                    'minimum_score' => $minimumScore,
                     'total_score' => $totalScore,
-                    'components' => $componentScores,
+                    'minimum_score' => $minimumScore,
                 ],
                 'score' => $totalScore,
             ];
         }
 
-        $lastCandle = $entryCandles[array_key_last($entryCandles)];
-        $currentPrice = (float) $lastCandle['close'];
-
-        $symbol = strtoupper($coin->symbol);
-        $pairSymbol = str_ends_with($symbol, 'USDT') ? $symbol : $symbol . 'USDT';
-
         return [
             'signal' => [
                 'symbol' => $pairSymbol,
-                'price' => round($currentPrice, 8),
+                'price' => $coin->current_price,
                 'total_score' => $totalScore,
-                'components' => $componentScores,
+                'components' => [
+                    'persistent_negative_funding' => $fundingOk,
+                    'funding_gate_bypassed' => $fundingGateBypassed,
+                    'oi_rising_price_sideways' => $oiRisingPriceSidewaysOk,
+                    'low_atr_compression' => $atrOk,
+                    'cvd_quietly_rising' => $cvdOk,
+                    'rsi_compression' => $rsiOk,
+                    'drying_volume' => $volumeDryingResult['ok'],
+                ],
                 'metadata' => [
-                    'entry_point' => round($currentPrice, 8),
-                    'stop_loss' => round($currentPrice * 0.97, 8),
+                    'screening_timeframe' => '4H',
                     'entry_timeframe' => '1H',
-                    'structure_timeframe' => '4H',
-                    'strategy' => 'pre_pump',
+                    'coinalyze_available' => $coinalyzeAvailable,
+                    'funding_recent_8h' => $fundingResult['recent_8h'],
+                    'oi_24h_growth' => $oiResult['growth'],
+                    'price_range_24h' => $priceRange24h,
+                    'atr_14' => $atrResult['atr_14'],
+                    'atr_30d_baseline' => $atrResult['atr_baseline'],
+                    'atr_ratio' => $atrResult['atr_ratio'],
+                    'cvd_slope_24h' => $cvdResult['slope'],
+                    'rsi_recent_4h' => $rsiResult['recent'],
+                    'volume_24h' => $coin->total_volume ?? $coin->volume_24h,
+                    'volume_7d_avg' => $volumeDryingResult['baseline'],
+                    'volume_ratio' => $volumeDryingResult['ratio'],
+                    'oi_declining_check_reference' => $this->checkOiDeclining($oiData),
                 ],
             ],
             'rejection_reason' => null,
@@ -361,280 +401,266 @@ class PrePumpService
     }
 
     /**
-     * Score funding rate proxy (0–100).
+     * Check persistent negative funding using Coinalyze 4H data.
      *
-     * Persistent negative funding = short sellers dominate = squeeze potential.
-     * Proxied from 4H OHLCV: the last 9 candles cover roughly 3 × 8H periods
-     * (spec: Funding < -0.05% per 8H for 3 consecutive periods).
+     * Aggregates 4H funding rate pairs into 8H buckets (average), then checks
+     * if the last 3 consecutive 8H periods are all below -0.0005.
+     * Matches Python _persistent_negative_funding() and _aggregate_to_8h_funding().
      *
-     * A high proportion of bearish candles (close < open) on 4H signals
-     * short-side dominance and negative funding pressure.
+     * Bypass: if Coinalyze returned no data, gate is bypassed (coin not penalised).
      *
-     * @param  array<int, array{open_time: int, open: float, high: float, low: float, close: float, volume: float}>  $candles  4H candles
+     * @param  array<int, array{timestamp: int, funding_rate: float}>  $fundingData4h
+     * @return array{ok: bool, recent_8h: float[], bypassed: bool}
      */
-    private function scoreFunding(array $candles): float
+    private function checkPersistentNegativeFunding(array $fundingData4h): array
     {
-        // 9 × 4H ≈ 3 × 8H periods (spec threshold window)
-        $lookback = min(9, count($candles));
-        $recentCandles = array_slice($candles, -$lookback);
-
-        $bearishCount = 0;
-        $totalPriceChangeRatio = 0.0;
-
-        foreach ($recentCandles as $candle) {
-            $range = $candle['open'] > 0
-                ? ($candle['close'] - $candle['open']) / $candle['open']
-                : 0.0;
-
-            $totalPriceChangeRatio += $range;
-
-            if ($candle['close'] < $candle['open']) {
-                $bearishCount++;
-            }
+        if ($fundingData4h === []) {
+            return ['ok' => false, 'recent_8h' => [], 'bypassed' => true];
         }
 
-        $total = count($recentCandles);
-        $bearishRatio = $total > 0 ? $bearishCount / $total : 0.0;
-        $avgPriceChange = $total > 0 ? $totalPriceChangeRatio / $total : 0.0;
+        $rates = array_column($fundingData4h, 'funding_rate');
+        $count = count($rates);
 
-        // 6+ of 9 candles bearish = persistent short pressure = high squeeze potential
-        if ($bearishRatio >= 0.67) {
-            return min(100.0, 75.0 + abs(min($avgPriceChange, 0.0)) * 1000);
+        // Aggregate pairs of 4H rates into 8H buckets (Python: start=0 if even, else 1)
+        $grouped = [];
+        $start = ($count % 2 === 0) ? 0 : 1;
+
+        for ($i = $start; $i < $count - 1; $i += 2) {
+            $grouped[] = ($rates[$i] + $rates[$i + 1]) / 2.0;
         }
 
-        if ($avgPriceChange < -0.005) {
-            // Price declining > 0.5% per candle on average
-            return 72.0;
+        if (count($grouped) < 3) {
+            return ['ok' => false, 'recent_8h' => $grouped, 'bypassed' => false];
         }
 
-        if ($avgPriceChange < 0.0) {
-            // Slight negative bias — mild short pressure
-            return 65.0;
-        }
+        $recent3 = array_slice($grouped, -3);
+        $allNegative = count(array_filter($recent3, static fn(float $r): bool => $r < -0.0005)) === 3;
 
-        if ($avgPriceChange < 0.005) {
-            // Sideways — neutral funding
-            return 55.0;
-        }
-
-        // Price rising = positive funding (unfavourable for squeeze)
-        return max(20.0, 50.0 - min($avgPriceChange, 0.05) * 400);
+        return ['ok' => $allNegative, 'recent_8h' => $recent3, 'bypassed' => false];
     }
 
     /**
-     * Score ATR compression (0–100).
+     * Check whether OI rose more than 10% across the history window.
      *
-     * Low ATR relative to 30-day baseline = volatility compression = pre-explosion setup.
-     * Spec: ATR 14-period below 30-day rolling average (4H OHLCV).
-     * Higher score = more compressed = stronger signal.
+     * Matches Python _oi_rising_24h(): (end - start) / start > 0.10.
      *
-     * @param  array<int, array{open_time: int, open: float, high: float, low: float, close: float, volume: float}>  $candles  4H candles
+     * @param  array<int, array{timestamp: int, open_interest: float}>  $oiData
+     * @return array{ok: bool, growth: float|null}
      */
-    private function scoreAtrCompression(array $candles): float
+    private function checkOiRising(array $oiData): array
     {
-        if (count($candles) < self::ATR_PERIOD + 1) {
-            return 50.0;
+        if (count($oiData) < 2) {
+            return ['ok' => false, 'growth' => null];
         }
 
-        $atrValues = $this->calculateAtr($candles, self::ATR_PERIOD);
+        $start = $oiData[0]['open_interest'];
+        $end = $oiData[array_key_last($oiData)]['open_interest'];
 
-        if ($atrValues === []) {
-            return 50.0;
+        if ($start <= 0.0) {
+            return ['ok' => false, 'growth' => null];
         }
 
-        $currentAtr = (float) end($atrValues);
+        $growth = ($end - $start) / $start;
 
-        // Baseline = average of up to ATR_BASELINE_PERIOD most-recent ATR values
-        $baselineCount = min(self::ATR_BASELINE_PERIOD, count($atrValues));
-        $baselineSlice = array_slice($atrValues, -$baselineCount);
-        $baselineAtr = array_sum($baselineSlice) / $baselineCount;
-
-        if ($baselineAtr <= 0.0) {
-            return 50.0;
-        }
-
-        $compressionRatio = $currentAtr / $baselineAtr;
-
-        return match (true) {
-            $compressionRatio <= 0.50 => 100.0,
-            $compressionRatio <= 0.70 => 90.0,
-            $compressionRatio <= 0.85 => 80.0,
-            $compressionRatio <= 1.00 => 65.0,
-            $compressionRatio <= 1.20 => 45.0,
-            default => max(10.0, 45.0 - ($compressionRatio - 1.2) * 100),
-        };
+        return ['ok' => $growth > 0.10, 'growth' => $growth];
     }
 
     /**
-     * Score OI accumulation proxy (0–100).
+     * Calculate price range over the last 6 × 4H candles.
      *
-     * OI rising while price is sideways = smart money building positions.
-     * Spec: OI rises >10% in 24H, price in range <3% (4H OHLCV).
-     * Proxied via volume trend (recent 6 candles = 24H on 4H) vs prior 6 candles.
+     * Matches Python _price_sideways_24h(): (high - low) / avg_close on last 6 candles.
+     * Returns null if fewer than 6 candles or average close is zero.
      *
-     * @param  array<int, array{open_time: int, open: float, high: float, low: float, close: float, volume: float}>  $candles  4H candles
+     * @param  array<int, array<string, mixed>>  $candles  4H candles
      */
-    private function scoreOiAccumulation(array $candles): float
+    private function calcPriceRange24h(array $candles): ?float
     {
-        if (count($candles) < 12) {
-            return 50.0;
+        if (count($candles) < 6) {
+            return null;
         }
 
-        $recent = array_slice($candles, -6);
-        $prior = array_slice($candles, -12, 6);
+        $window = array_slice($candles, -6);
+        $low = min(array_column($window, 'low'));
+        $high = max(array_column($window, 'high'));
+        $avgClose = array_sum(array_column($window, 'close')) / 6.0;
 
-        $recentAvgVolume = array_sum(array_column($recent, 'volume')) / 6;
-        $priorAvgVolume = array_sum(array_column($prior, 'volume')) / 6;
-
-        if ($priorAvgVolume <= 0.0) {
-            return 50.0;
+        if ($avgClose <= 0.0) {
+            return null;
         }
 
-        $volumeGrowth = ($recentAvgVolume - $priorAvgVolume) / $priorAvgVolume;
-
-        $recentAvgClose = array_sum(array_column($recent, 'close')) / 6;
-        $priceRange = $recentAvgClose > 0
-            ? (max(array_column($recent, 'high')) - min(array_column($recent, 'low'))) / $recentAvgClose
-            : 0.1;
-
-        $volumeScore = match (true) {
-            $volumeGrowth >= 0.20 => 100.0,
-            $volumeGrowth >= 0.10 => 85.0,
-            $volumeGrowth >= 0.00 => 65.0,
-            $volumeGrowth >= -0.15 => 45.0,
-            default => 25.0,
-        };
-
-        $priceRangeScore = match (true) {
-            $priceRange <= 0.02 => 100.0,
-            $priceRange <= 0.03 => 90.0,
-            $priceRange <= 0.05 => 70.0,
-            $priceRange <= 0.08 => 50.0,
-            default => 25.0,
-        };
-
-        return round(($volumeScore * 0.6) + ($priceRangeScore * 0.4), 2);
+        return ($high - $low) / $avgClose;
     }
 
     /**
-     * Score Relative Strength vs market (0–100).
+     * Check low ATR compression — ATR(14) on SMA basis is below the 30-day ATR baseline.
      *
-     * Coin holding or gaining price while the broader market sells = institutional interest.
-     * Proxied from 1H klines: compares coin's recent 24H trend vs its prior 48H trend.
+     * Matches Python:
+     *   atr_14       = _calc_atr(candles, period=14)        — SMA ATR on all candles
+     *   atr_baseline = _calc_atr(candles[-180:], period=30) — SMA ATR on last 180 candles
+     *   atr_ok       = atr_14 < atr_baseline
      *
-     * @param  array<int, array{open_time: int, open: float, high: float, low: float, close: float, volume: float}>  $candles  1H candles
+     * @param  array<int, array<string, mixed>>  $candles  4H candles
+     * @return array{ok: bool, atr_14: float|null, atr_baseline: float|null, atr_ratio: float|null}
      */
-    private function scoreRelativeStrength(array $candles): float
+    private function checkLowAtr(array $candles): array
     {
-        if (count($candles) < 48) {
-            return 50.0;
+        $atr14 = $this->calcAtrSma($candles, self::ATR_PERIOD);
+
+        $baselineWindow = array_slice($candles, -self::ATR_BASELINE_WINDOW);
+        $atrBaseline = $this->calcAtrSma($baselineWindow, self::ATR_BASELINE_PERIOD);
+
+        if ($atr14 === null || $atrBaseline === null || $atrBaseline <= 0.0) {
+            return ['ok' => false, 'atr_14' => $atr14, 'atr_baseline' => $atrBaseline, 'atr_ratio' => null];
         }
 
-        $recent = array_slice($candles, -24);
-        $prior = array_slice($candles, -72, 48);
+        $ratio = $atr14 / $atrBaseline;
 
-        $recentStart = (float) $recent[0]['close'];
-        $recentEnd = (float) $recent[array_key_last($recent)]['close'];
-        $priorStart = (float) $prior[0]['close'];
-        $priorEnd = (float) $prior[array_key_last($prior)]['close'];
-
-        if ($recentStart <= 0.0 || $priorStart <= 0.0) {
-            return 50.0;
-        }
-
-        $recentChange = ($recentEnd - $recentStart) / $recentStart;
-        $priorChange = ($priorEnd - $priorStart) / $priorStart;
-        $rsDiff = $recentChange - $priorChange;
-
-        return match (true) {
-            $rsDiff >= 0.05 => 100.0,
-            $rsDiff >= 0.02 => 85.0,
-            $rsDiff >= 0.00 => 70.0,
-            $rsDiff >= -0.02 => 55.0,
-            $rsDiff >= -0.05 => 40.0,
-            default => 20.0,
-        };
+        return [
+            'ok' => $atr14 < $atrBaseline,
+            'atr_14' => $atr14,
+            'atr_baseline' => $atrBaseline,
+            'atr_ratio' => $ratio,
+        ];
     }
 
     /**
-     * Score CVD divergence (0–100).
+     * Check whether CVD slope is positive over the last 6 × 4H candles.
      *
-     * CVD rising quietly while price is flat = hidden accumulation (spec).
-     * CVD = cumulative sum of (buy candle volume - sell candle volume) over 24H (1H klines).
+     * Sideways check is applied in the caller (cvd_ok = cvd_up AND sideways).
      *
-     * @param  array<int, array{open_time: int, open: float, high: float, low: float, close: float, volume: float}>  $candles  1H candles
+     * CVD delta per candle = (2 × taker_buy_volume) − total_volume.
+     * slope = (cvd[-1] − cvd[0]) / (n − 1). Matches Python _cvd_slope_positive().
+     *
+     * Returns ok=false and slope=null if taker_buy_volume is unavailable.
+     *
+     * @param  array<int, array<string, mixed>>  $candles  4H candles (must have taker_buy_volume)
+     * @return array{ok: bool, slope: float|null}
      */
-    private function scoreCvdDivergence(array $candles): float
+    private function checkCvdRising(array $candles): array
     {
-        $lookback = min(24, count($candles));
-        $recentCandles = array_slice($candles, -$lookback);
+        $lookback = 6;
 
-        $cvdValues = [];
-        $cvd = 0.0;
+        if (count($candles) < $lookback) {
+            return ['ok' => false, 'slope' => null];
+        }
 
-        foreach ($recentCandles as $candle) {
-            if ($candle['close'] >= $candle['open']) {
-                $cvd += $candle['volume'];
-            } else {
-                $cvd -= $candle['volume'];
+        $window = array_slice($candles, -$lookback);
+        $cvd = [];
+        $cumulative = 0.0;
+
+        foreach ($window as $candle) {
+            $takerBuy = $candle['taker_buy_volume'] ?? null;
+            $total = $candle['volume'] ?? null;
+
+            if ($takerBuy === null || $total === null) {
+                return ['ok' => false, 'slope' => null];
             }
 
-            $cvdValues[] = $cvd;
+            $cumulative += (2.0 * (float) $takerBuy) - (float) $total;
+            $cvd[] = $cumulative;
         }
 
-        if ($cvdValues === []) {
-            return 50.0;
+        if (count($cvd) < 2) {
+            return ['ok' => false, 'slope' => null];
         }
 
-        $midpoint = (int) floor(count($cvdValues) / 2);
-        $firstHalfAvg = array_sum(array_slice($cvdValues, 0, $midpoint)) / max(1, $midpoint);
-        $secondHalfAvg = array_sum(array_slice($cvdValues, $midpoint)) / max(1, count($cvdValues) - $midpoint);
+        $slope = ($cvd[count($cvd) - 1] - $cvd[0]) / (count($cvd) - 1);
 
-        $priceStart = (float) $recentCandles[0]['close'];
-        $priceEnd = (float) $recentCandles[array_key_last($recentCandles)]['close'];
-        $priceChange = $priceStart > 0 ? ($priceEnd - $priceStart) / $priceStart : 0.0;
-
-        $cvdRising = ($secondHalfAvg - $firstHalfAvg) > 0;
-        $priceSideways = abs($priceChange) < 0.03;
-        $priceDeclining = $priceChange < -0.01;
-
-        if ($cvdRising && $priceDeclining) {
-            return 100.0;
-        }
-
-        if ($cvdRising && $priceSideways) {
-            return 85.0;
-        }
-
-        if ($cvdRising) {
-            return 65.0;
-        }
-
-        if (! $cvdRising && $priceSideways) {
-            return 40.0;
-        }
-
-        return 25.0;
+        return ['ok' => $slope > 0.0, 'slope' => $slope];
     }
 
     /**
-     * Calculate ATR (Average True Range) using Wilder's smoothing method.
+     * Check RSI compression — RSI(14) stays in the 45–55 band for the last 5 × 4H candles.
      *
-     * @param  array<int, array{open_time: int, open: float, high: float, low: float, close: float, volume: float}>  $candles
-     * @return float[]
+     * Matches Python _rsi_compression(candles_4h, low=45.0, high=55.0, min_candles=5).
+     *
+     * @param  array<int, array<string, mixed>>  $candles  4H candles
+     * @return array{ok: bool, recent: float[]}
      */
-    private function calculateAtr(array $candles, int $period): array
+    private function checkRsiCompression(array $candles): array
+    {
+        $closes = array_map(static fn(array $c): float => (float) $c['close'], $candles);
+        $rsiSeries = $this->calculateRsiSeries($closes, 14);
+
+        if (count($rsiSeries) < 5) {
+            return ['ok' => false, 'recent' => $rsiSeries];
+        }
+
+        $recent5 = array_slice($rsiSeries, -5);
+        $allInBand = count(array_filter(
+            $recent5,
+            static fn(float $r): bool => $r >= 45.0 && $r <= 55.0,
+        )) === 5;
+
+        return ['ok' => $allInBand, 'recent' => $recent5];
+    }
+
+    /**
+     * Check volume drying — current 24H volume < 50% of 7-day average.
+     *
+     * Informational only; not included in the score (matching Python spec §5.5).
+     * Matches Python _volume_drying(): ratio = current_24h / baseline; ok = ratio < 0.5.
+     *
+     * @param  float[]  $dailyVolumes  Daily volumes from CoinGecko (8 days)
+     * @return array{ok: bool, baseline: float|null, ratio: float|null}
+     */
+    private function checkVolumeDrying(Coin $coin, array $dailyVolumes): array
+    {
+        $current24h = (float) ($coin->total_volume ?? $coin->volume_24h ?? 0.0);
+
+        if ($current24h <= 0.0 || count($dailyVolumes) < 7) {
+            return ['ok' => false, 'baseline' => null, 'ratio' => null];
+        }
+
+        $last7 = array_slice($dailyVolumes, -7);
+        $baseline = array_sum($last7) / 7.0;
+
+        if ($baseline <= 0.0) {
+            return ['ok' => false, 'baseline' => $baseline, 'ratio' => null];
+        }
+
+        $ratio = $current24h / $baseline;
+
+        return ['ok' => $ratio < 0.5, 'baseline' => $baseline, 'ratio' => $ratio];
+    }
+
+    /**
+     * Check if OI is declining (last value < first value).
+     *
+     * Used as informational reference in metadata (Python: check_oi_decline(oi_data)).
+     *
+     * @param  array<int, array{timestamp: int, open_interest: float}>  $oiData
+     */
+    private function checkOiDeclining(array $oiData): bool
+    {
+        if (count($oiData) < 2) {
+            return false;
+        }
+
+        return $oiData[array_key_last($oiData)]['open_interest'] < $oiData[0]['open_interest'];
+    }
+
+    /**
+     * Calculate ATR using SMA of True Ranges (matching Python _sma(_true_ranges(candles), period)).
+     *
+     * Python uses simple rolling SMA, NOT Wilder's exponential smoothing.
+     * Returns the last value of the SMA series, or null if data is insufficient.
+     *
+     * @param  array<int, array<string, mixed>>  $candles
+     */
+    private function calcAtrSma(array $candles, int $period): ?float
     {
         if (count($candles) < $period + 1) {
-            return [];
+            return null;
         }
 
+        // True Range from index 1 onward
         $trValues = [];
 
         for ($i = 1; $i < count($candles); $i++) {
-            $high = $candles[$i]['high'];
-            $low = $candles[$i]['low'];
-            $prevClose = $candles[$i - 1]['close'];
+            $high = (float) $candles[$i]['high'];
+            $low = (float) $candles[$i]['low'];
+            $prevClose = (float) $candles[$i - 1]['close'];
 
             $trValues[] = max(
                 $high - $low,
@@ -643,23 +669,82 @@ class PrePumpService
             );
         }
 
-        $initialAtr = array_sum(array_slice($trValues, 0, $period)) / $period;
-        $atrValues = [$initialAtr];
-        $currentAtr = $initialAtr;
-
-        for ($i = $period; $i < count($trValues); $i++) {
-            $currentAtr = (($currentAtr * ($period - 1)) + $trValues[$i]) / $period;
-            $atrValues[] = $currentAtr;
+        if (count($trValues) < $period) {
+            return null;
         }
 
-        return $atrValues;
+        // Rolling SMA — return only the last value (matching Python _sma()[-1])
+        $rollingSum = array_sum(array_slice($trValues, 0, $period));
+        $lastSma = $rollingSum / $period;
+
+        for ($i = $period; $i < count($trValues); $i++) {
+            $rollingSum += $trValues[$i] - $trValues[$i - $period];
+            $lastSma = $rollingSum / $period;
+        }
+
+        return $lastSma;
+    }
+
+    /**
+     * Calculate RSI series using Wilder's smoothing on a list of close prices.
+     *
+     * Matches Python _calc_rsi_series() logic exactly.
+     *
+     * @param  float[]  $closes
+     * @return float[]
+     */
+    private function calculateRsiSeries(array $closes, int $period = 14): array
+    {
+        if (count($closes) <= $period) {
+            return [];
+        }
+
+        $gains = [];
+        $losses = [];
+
+        for ($i = 1; $i < count($closes); $i++) {
+            $delta = $closes[$i] - $closes[$i - 1];
+            $gains[] = max($delta, 0.0);
+            $losses[] = abs(min($delta, 0.0));
+        }
+
+        $avgGain = array_sum(array_slice($gains, 0, $period)) / $period;
+        $avgLoss = array_sum(array_slice($losses, 0, $period)) / $period;
+        $rsiValues = [];
+
+        for ($i = $period; $i < count($gains); $i++) {
+            $avgGain = (($avgGain * ($period - 1)) + $gains[$i]) / $period;
+            $avgLoss = (($avgLoss * ($period - 1)) + $losses[$i]) / $period;
+
+            if ($avgLoss == 0.0) {
+                $rsiValues[] = 100.0;
+
+                continue;
+            }
+
+            $rs = $avgGain / $avgLoss;
+            $rsiValues[] = 100.0 - (100.0 / (1.0 + $rs));
+        }
+
+        return $rsiValues;
     }
 
     /**
      * Map raw Binance kline rows to structured candle arrays.
      *
+     * Binance kline field indices:
+     *   [0]  open_time
+     *   [1]  open
+     *   [2]  high
+     *   [3]  low
+     *   [4]  close
+     *   [5]  volume (base asset)
+     *   [9]  taker_buy_base_asset_volume
+     *
+     * taker_buy_volume is required by checkCvdRising() for accurate CVD computation.
+     *
      * @param  array<int, array<int, mixed>>  $klines
-     * @return array<int, array{open_time: int, open: float, high: float, low: float, close: float, volume: float}>
+     * @return array<int, array{open_time: int, open: float, high: float, low: float, close: float, volume: float, taker_buy_volume: float|null}>
      */
     private function mapKlinesToCandles(array $klines): array
     {
@@ -688,6 +773,7 @@ class PrePumpService
                 'low' => (float) $row[3],
                 'close' => (float) $row[4],
                 'volume' => (float) $row[5],
+                'taker_buy_volume' => isset($row[9]) && is_numeric($row[9]) ? (float) $row[9] : null,
             ];
         }
 
