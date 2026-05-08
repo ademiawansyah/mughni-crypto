@@ -41,6 +41,11 @@ COINGECKO_API_KEY: str = _get("COINGECKO_API_KEY")
 COINGECKO_TIMEOUT: int = int(_get("COINGECKO_TIMEOUT", "10"))
 COINGECKO_VS_CURRENCY: str = _get("COINGECKO_VS_CURRENCY", "usd")
 
+# CoinMarketCap
+COINMARKETCAP_BASE_URL: str = _get("COINMARKETCAP_BASE_URL", "https://pro-api.coinmarketcap.com")
+COINMARKETCAP_API_KEY: str = _get("COINMARKETCAP_API_KEY")
+COINMARKETCAP_TIMEOUT: int = int(_get("COINMARKETCAP_TIMEOUT", "10"))
+
 # Binance (futures)
 BINANCE_BASE_URL: str = _get("BINANCE_BASE_URL", "https://fapi.binance.com/fapi/v1")
 BINANCE_API_KEY: str = _get("BINANCE_API_KEY")
