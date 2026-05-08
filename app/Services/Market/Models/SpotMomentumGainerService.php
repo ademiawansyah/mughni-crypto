@@ -256,7 +256,16 @@ class SpotMomentumGainerService
                 }
             }
 
-            return (float) ($coin['market_cap'] ?? 0) >= self::MIN_MARKET_CAP;
+            if ((float) ($coin['market_cap'] ?? 0) < self::MIN_MARKET_CAP) {
+                return false;
+            }
+
+            // Python filter_layer3: require non-zero price and volume
+            if ((float) ($coin['price'] ?? 0) <= 0 || (float) ($coin['volume_24h'] ?? 0) <= 0) {
+                return false;
+            }
+
+            return true;
         }));
 
         usort(
@@ -401,29 +410,29 @@ class SpotMomentumGainerService
                 'price' => round($price, 8),
                 'total_score' => round($totalScore, 2),
                 'components' => [
-                    'change_24h' => round($changeScore, 2),
-                    'volume_ratio' => round($volumeScore, 2),
-                    'body_ratio' => round($bodyScore, 2),
-                    'gate' => [
-                        'green_candle' => true,
-                        'large_body' => true,
-                        'minimal_upper_wick' => true,
-                        'close_above_prior_high' => true,
-                        'high_volume' => true,
-                    ],
-                    'raw' => [
-                        'change_24h' => round($change24h, 4),
-                        'volume_ratio' => round($volumeRatio, 4),
-                        'body_ratio' => round($bodyRatio, 4),
-                    ],
+                    'bullish_candle_gate' => true,
+                    'green_candle' => true,
+                    'large_body' => true,
+                    'minimal_upper_wick' => true,
+                    'close_breakout' => true,
+                    'high_volume' => true,
+                    'change_score' => round($changeScore, 4),
+                    'volume_score' => round($volumeScore, 4),
+                    'body_score' => round($bodyScore, 4),
                 ],
                 'metadata' => [
-                    'entry_point' => round($price, 8),
-                    'stop_loss' => round((float) $today['low'], 8),
+                    'screening_timeframe' => '1D',
                     'entry_timeframe' => '1D',
-                    'strategy' => self::MODEL_NAME,
-                    'source_used' => $sourceUsed,
                     'spot_only' => true,
+                    'data_source' => $sourceUsed,
+                    'price_change_percentage_24h' => round($change24h, 4),
+                    'body_ratio' => round($bodyRatio, 4),
+                    'upper_wick_ratio' => is_infinite($upperWickRatio) ? null : round($upperWickRatio, 4),
+                    'volume_ratio' => round($volumeRatio, 4),
+                    'prior_high' => round((float) $yesterday['high'], 8),
+                    'stop_loss' => round((float) $today['low'], 8),
+                    'entry_point' => round($price, 8),
+                    'strategy' => self::MODEL_NAME,
                     'allow_short' => false,
                     'allow_leverage' => false,
                 ],
@@ -436,16 +445,18 @@ class SpotMomentumGainerService
 
     private function normalizeChange24hScore(float $change24h): float
     {
-        $bounded = max(0.0, min($change24h, 25.0));
+        // Python: 40 * clamp(change_24h / 100, 0, 1) — saturates at 100% gain
+        $bounded = max(0.0, min($change24h / 100.0, 1.0));
 
-        return ($bounded / 25.0) * 100;
+        return $bounded * 100;
     }
 
     private function normalizeVolumeRatioScore(float $volumeRatio): float
     {
-        $bounded = max(0.0, min($volumeRatio, 3.0));
+        // Python: 35 * clamp(volume_ratio, 0, 1) — saturates at 1.0× average volume
+        $bounded = max(0.0, min($volumeRatio, 1.0));
 
-        return ($bounded / 3.0) * 100;
+        return $bounded * 100;
     }
 
     private function normalizeBodyRatioScore(float $bodyRatio): float

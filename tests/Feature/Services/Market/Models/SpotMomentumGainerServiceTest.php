@@ -87,9 +87,9 @@ class SpotMomentumGainerServiceTest extends TestCase
         $this->assertSame(1, $stored->supporting_data['evaluated']);
         $this->assertSame(1, $stored->supporting_data['shortlisted']);
         $this->assertSame('coinmarketcap', $stored->supporting_data['source_used']);
-        $this->assertArrayHasKey('change_24h', $stored->result['results'][0]['components']);
-        $this->assertArrayHasKey('volume_ratio', $stored->result['results'][0]['components']);
-        $this->assertArrayHasKey('body_ratio', $stored->result['results'][0]['components']);
+        $this->assertArrayHasKey('change_score', $stored->result['results'][0]['components']);
+        $this->assertArrayHasKey('volume_score', $stored->result['results'][0]['components']);
+        $this->assertArrayHasKey('body_score', $stored->result['results'][0]['components']);
     }
 
     public function test_it_uses_coingecko_fallback_and_sends_no_setup_notification_when_gate_fails(): void

@@ -55,7 +55,7 @@ class GitHubWebhookController extends Controller
         RunDeployScriptJob::dispatch($payload)
             ->onQueue((string) config('deployment.queue', 'default'));
 
-        return response()->json(['message' => 'Deployment queued'], 202);
+        return response()->json(['message' => 'Deployment queued'], 200);
     }
 
     private function isValidSignature(string $payload, string $providedSignature, string $secret): bool
