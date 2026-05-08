@@ -138,11 +138,11 @@ class CounterTrendService
 
         usort(
             $signals,
-            static fn(array $left, array $right): int => $right['total_score'] <=> $left['total_score'],
+            static fn (array $left, array $right): int => $right['total_score'] <=> $left['total_score'],
         );
 
         $ranked = array_values(array_map(
-            static fn(array $signal, int $index): array => array_merge($signal, ['rank' => $index + 1]),
+            static fn (array $signal, int $index): array => array_merge($signal, ['rank' => $index + 1]),
             array_slice($signals, 0, self::MAX_RESULTS),
             array_keys(array_slice($signals, 0, self::MAX_RESULTS)),
         ));
@@ -226,10 +226,7 @@ class CounterTrendService
         return Coin::query()
             ->where('is_valid', true)
             ->whereRaw("COALESCE((raw_data->>'market_cap_rank')::int, 999999) BETWEEN ? AND ?", [50, 300])
-            ->where(function ($query) {
-                $query->where('total_volume', '>=', self::MIN_VOLUME_USD)
-                    ->orWhere('volume_24h', '>=', self::MIN_VOLUME_USD);
-            })
+            ->where('total_volume', '>=', self::MIN_VOLUME_USD)
             ->get();
     }
 
@@ -314,9 +311,20 @@ class CounterTrendService
                 'zone_low' => null,
             ];
 
-        $futuresSymbol = strtoupper($symbol) . 'USDT';
-        $oiDecline = $this->detectOiDecline($futuresSymbol);
-        $fundingExtreme = $this->detectExtremeFundingRate($futuresSymbol);
+        $futuresSymbol = strtoupper($symbol).'USDT';
+        $oiData = $this->marketRegimeService->getCounterTrendOpenInterestHistoryForCoin(
+            symbol: $futuresSymbol,
+            interval: '1hour',
+            limit: 24,
+        );
+        $fundingData = $this->marketRegimeService->getCounterTrendFundingRateHistoryForCoin(
+            symbol: $futuresSymbol,
+            limit: 10,
+        );
+        $coinalyzeAvailable = $oiData !== [] || $fundingData !== [];
+        $derivativesSkipped = $oiData === [] && $fundingData === [];
+        $oiDecline = $this->detectOiDecline($oiData);
+        $fundingExtreme = $this->detectExtremeFundingRate($fundingData);
 
         $score = self::SCORE_SWEEP + self::SCORE_MSS;
         $score += $fvg['detected'] ? self::SCORE_ENTRY_ZONE : 0;
@@ -340,15 +348,19 @@ class CounterTrendService
                     'fvg_ob_15m' => $fvg['detected'],
                     'oi_declining' => $oiDecline,
                     'extreme_funding' => $fundingExtreme,
+                    'derivatives_skipped' => $derivativesSkipped,
                 ],
                 'metadata' => [
                     'structure_timeframe' => strtoupper($structureTimeframe),
                     'entry_timeframe' => strtoupper($entryTimeframe),
                     'macro_timeframe' => strtoupper($macroTimeframe),
                     'macro_aligned' => $macroAligned,
+                    'coinalyze_available' => $coinalyzeAvailable,
+                    'oi_points' => count($oiData),
+                    'funding_points' => count($fundingData),
                     'stop_loss' => $stopLoss,
                     'fvg_zone_15m' => $fvg['detected']
-                        ? sprintf('%.6f-%.6f', $fvg['zone_low'], $fvg['zone_high'])
+                        ? sprintf('%.6f–%.6f', $fvg['zone_low'], $fvg['zone_high'])
                         : null,
                 ],
             ],
@@ -617,14 +629,11 @@ class CounterTrendService
         ];
     }
 
-    private function detectOiDecline(string $futuresSymbol): bool
+    /**
+     * @param  array<int, array{timestamp: int, open_interest: float}>  $history
+     */
+    private function detectOiDecline(array $history): bool
     {
-        $history = $this->marketRegimeService->getCounterTrendOpenInterestHistoryForCoin(
-            symbol: $futuresSymbol,
-            interval: '1hour',
-            limit: 24,
-        );
-
         if (count($history) < 2) {
             return false;
         }
@@ -639,13 +648,11 @@ class CounterTrendService
         return (($prior - $recent) / $prior) >= 0.05;
     }
 
-    private function detectExtremeFundingRate(string $futuresSymbol): bool
+    /**
+     * @param  array<int, array{timestamp: int, funding_rate: float}>  $history
+     */
+    private function detectExtremeFundingRate(array $history): bool
     {
-        $history = $this->marketRegimeService->getCounterTrendFundingRateHistoryForCoin(
-            symbol: $futuresSymbol,
-            limit: 10,
-        );
-
         if ($history === []) {
             return false;
         }

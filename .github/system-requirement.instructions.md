@@ -456,6 +456,7 @@ Use public APIs only.
 | 1–3 | Coinalyze | `/futures/open-interest` | Open Interest history | Exhaustion confirmation |
 | 1–3 | Coinalyze | `/futures/funding-rate` | Funding rate history | Reversal confirmation |
 | 1–3 | Binance | `/api/v3/trades` | Raw trades | CVD calculation |
+| 2 | CoinGecko | `/coins/{id}/market_chart` | Volume history | Drying volume detection (Model 2) |
 | 4 | CoinMarketCap | `/v1/cryptocurrency/listings/latest` | Top 24H gainers | Momentum screening |
 | 4 | CoinGecko | `/coins/{id}/ohlc` | Daily OHLCV | Alternative candle data |
 
@@ -519,6 +520,8 @@ def get_market_data():
     _cache['ts'] = now
     return _cache['data']
 ```
+
+> **Fallback:** If CoinGecko fails, use Binance `/api/v3/ticker/24hr` for volume and price change data.
 
 ### 9.4 Layer 2 — Shared Pre-Filter
 
@@ -602,6 +605,161 @@ Only after Layer 3 filtering do we fetch expensive data (OHLCV, OI, Funding, CVD
 
 **Each model caches its Layer 3 subset separately** to avoid re-fetching when running again.
 
+#### OHLCV In-Memory Cache — Key Format
+
+If the same coin appears as a candidate in two different models, its OHLCV must NOT be fetched twice. Use a shared in-memory cache with `symbol_interval` as key.
+
+| Cache Key Format | Example | Notes |
+|---|---|---|
+| `symbol_interval` | `BTC_1d` | Daily candles for Model 3 and Model 4 |
+| `symbol_interval` | `AKT_4h` | 4H candles for Model 1 and Model 2 |
+| `symbol_interval` | `AKT_15m` | 15M candles for Model 1 entry confirmation |
+| `symbol_oi` | `AKT_oi` | Open Interest — cached by symbol |
+| `symbol_fr` | `AKT_fr` | Funding Rate — cached by symbol |
+
+```python
+# ohlcv_cache.py
+import requests, time
+
+_ohlcv_cache: dict = {}
+OHLCV_TTL = 300
+
+def get_ohlcv(symbol: str, interval: str, limit: int = 10) -> list:
+    key = f'{symbol.upper()}_{interval}'
+    now = time.time()
+    cached = _ohlcv_cache.get(key)
+    if cached and (now - cached['ts']) < OHLCV_TTL:
+        return cached['data']
+    url    = 'https://api.binance.com/api/v3/klines'
+    params = {'symbol': f'{symbol.upper()}USDT', 'interval': interval, 'limit': limit}
+    resp   = requests.get(url, params=params, timeout=8)
+    resp.raise_for_status()
+    _ohlcv_cache[key] = {'data': resp.json(), 'ts': now}
+    return _ohlcv_cache[key]['data']
+
+def parse_candles(raw: list) -> list[dict]:
+    return [{'open': float(c[1]), 'high': float(c[2]),
+             'low':  float(c[3]), 'close': float(c[4]), 'volume': float(c[5])}
+            for c in raw]
+```
+
+### 9.7 API Call Estimation — With vs. Without Pipeline
+
+| Scenario | Shared Fetch | OHLCV per Model | Derivatives per Model | Total per Day |
+|---|---|---|---|---|
+| Without pipeline (each model scans all) | 4×/run × 96 runs = 384× | ~300×/run × 4 models | ~60×/run × 4 models | ~150,000+ calls/day |
+| With pipeline (v2.1) | 1×/run, cached | ~15–40× per run per model | ~10–20× per model per run | ~5,000–8,000 calls/day |
+| **Savings** | **75%** | **~90–95%** | **~80–90%** | **~95% reduction** |
+
+- CoinGecko free tier: ~10–30 req/min. With shared fetch, well within limits.
+- Binance public API: 1200 req/min (weight-based). OHLCV cache prevents re-fetch within 5 min.
+- Coinalyze free tier is stricter (~10 req/min). OI and Funding only fetched for coins that pass Layer 3.
+- Add `time.sleep(0.2)` between requests in the heavy analysis loop to avoid burst.
+
+### 9.8 Standard Coin Data Structure
+
+Format flowing from Layer 2 to all models. All models use the same base fields.
+
+```python
+# Coin dict after pre_filter (Layer 2 output)
+{
+    'id':                          'akash-network',
+    'symbol':                      'akt',
+    'name':                        'Akash Network',
+    'current_price':               0.6327,
+    'market_cap':                  185_412_492,
+    'market_cap_rank':             78,
+    'total_volume':                75_654_668,
+    'price_change_percentage_24h': 14.22,
+}
+
+# Fields added after heavy analysis (Layer 4 output):
+# 'candles_1d':    [{open, high, low, close, volume}, ...]  — Model 3 & 4
+# 'candles_4h':    [{open, high, low, close, volume}, ...]  — Model 1 & 2
+# 'candles_15m':   [{open, high, low, close, volume}, ...]  — Model 1 entry confirmation
+# 'open_interest': 0.0   — USD value
+# 'funding_rate':  0.0   — % (e.g. -0.001 = -0.1%)
+# 'cvd_24h':       0.0   — cumulative volume delta (24H)
+# 'stop_loss':     0.0   — calculated per-model
+# 'score':         0.0   — final score 0–100
+```
+
+---
+
+### 9.9 Pipeline Orchestrator
+
+Each model service calls `run_pipeline(model=N)` — no model fetches data independently.
+
+```python
+# pipeline.py
+from shared_fetch  import get_market_data
+from pre_filter    import pre_filter
+from model_filters import filter_model1, filter_model2, filter_model3, filter_model4
+from ohlcv_cache   import get_ohlcv, parse_candles
+from analysis      import analyze_model1, analyze_model2, analyze_model3, analyze_model4
+
+def run_pipeline(model: int) -> list[dict]:
+    raw_coins   = get_market_data()
+    clean_coins = pre_filter(raw_coins)
+    filters     = {1: filter_model1, 2: filter_model2,
+                   3: filter_model3, 4: filter_model4}
+    candidates  = filters[model](clean_coins)
+    results = []
+    for coin in candidates:
+        try:
+            sym = coin['symbol']
+            if model in (1, 2):
+                c4h  = parse_candles(get_ohlcv(sym, '4h',  limit=20))
+                c15m = parse_candles(get_ohlcv(sym, '15m', limit=20))
+            else:
+                c1d  = parse_candles(get_ohlcv(sym, '1d',  limit=10))
+            if model == 1: score = analyze_model1(coin, c4h, c15m)
+            if model == 2: score = analyze_model2(coin, c4h)
+            if model == 3: score = analyze_model3(coin, c1d)
+            if model == 4: score = analyze_model4(coin, c1d)
+            if score > 0: results.append({**coin, 'score': score})
+        except Exception as e:
+            import logging; logging.warning(f'Skip {coin["symbol"]}: {e}')
+            continue
+    return sorted(results, key=lambda x: x['score'], reverse=True)[:10]
+```
+
+### 9.10 Scheduler — Run Schedule Per Model
+
+| Service | Interval | First Run | Scheduler Library |
+|---|---|---|---|
+| service_model1.py | Every 15 minutes | 07:00 WIB | `IntervalTrigger(minutes=15)` |
+| service_model2.py | Every 4 hours | 07:00 WIB | `IntervalTrigger(hours=4)` |
+| service_model3.py | Every 4 hours | 07:00 WIB | `IntervalTrigger(hours=4)` |
+| service_model4.py | Once daily | 07:00 WIB exactly | `CronTrigger(hour=7, minute=0, timezone='Asia/Jakarta')` |
+
+```python
+# service_model4.py — scheduler example
+from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.triggers.cron import CronTrigger
+from pipeline import run_pipeline
+from notifier import send_alert
+import logging
+
+logging.basicConfig(level=logging.INFO)
+
+def job_model4():
+    logging.info('Model 4: running pipeline...')
+    results = run_pipeline(model=4)
+    if not results:
+        send_alert('Model 4: no setup today.')
+        return
+    msg = 'Model 4 — Spot Gainers:\n'
+    for i, r in enumerate(results, 1):
+        sl  = r.get('stop_loss', 0)
+        msg += f"{i}. {r['symbol'].upper()} | Price: {r['current_price']} | 24h: +{r['price_change_percentage_24h']:.1f}% | SL: {sl} | Score: {r['score']:.1f}\n"
+    send_alert(msg)
+
+scheduler = BlockingScheduler(timezone='Asia/Jakarta')
+scheduler.add_job(job_model4, CronTrigger(hour=7, minute=0, timezone='Asia/Jakarta'))
+scheduler.start()
+```
+
 ---
 
 ## 10. Caching & Rate Limiting Policy
@@ -632,6 +790,30 @@ Only after Layer 3 filtering do we fetch expensive data (OHLCV, OI, Funding, CVD
 - **Retry:** 3 attempts with exponential backoff (1s, 2s, 4s).
 - **Circuit Breaker:** If API fails 5 consecutive times, skip that data source for 5 minutes.
 - **Fallback:** Use cached stale data rather than returning error to model.
+
+### 10.4 Error Handling & Fallback Table
+
+| Error Condition | Action | Impact |
+|---|---|---|
+| CoinGecko rate limit (429) | Retry 1× after 60 seconds. If still failing, serve last known cache | Data may be stale; pipeline continues running |
+| Binance OHLCV fails for 1 coin | Log warning, skip that coin, continue to next | Coin excluded from output; other models unaffected |
+| Coinalyze unavailable | Skip derivatives step; run model without OI/Funding | Derivative score = 0; add flag `no_deriv: true` to output |
+| All coins fail analysis | Send notification: "Pipeline error — no output for model X" | Developer must check VPS logs |
+| Cache expired + API down | Serve last cache entry with flag `stale_data: true` | User can filter stale notifications downstream |
+
+```python
+# Pattern: try/except in heavy analysis loop
+for coin in candidates:
+    try:
+        raw     = get_ohlcv(coin['symbol'], '1d', limit=10)
+        candles = parse_candles(raw)
+        score   = analyze_model(coin, candles)
+        if score > 0:
+            results.append({**coin, 'score': score})
+    except Exception as e:
+        logging.warning(f"Skip {coin['symbol']}: {e}")
+        continue  # never crash entire pipeline for 1 coin
+```
 
 ---
 

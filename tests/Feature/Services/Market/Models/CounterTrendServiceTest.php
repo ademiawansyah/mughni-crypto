@@ -31,9 +31,14 @@ class CounterTrendServiceTest extends TestCase
         ]);
 
         $marketRegimeService = $this->createMock(MarketRegimeService::class);
-        $marketRegimeService->expects($this->once())
+        $marketRegimeService->expects($this->exactly(3))
             ->method('getOhlcvDataForCoin')
-            ->willReturn($this->structureKlines());
+            ->withAnyParameters()
+            ->willReturnMap([
+                ['TEST', '1h', 100, $this->structureKlines()],
+                ['TEST', '15m', 100, $this->entryKlines()],
+                ['TEST', '1d', 10, $this->macroKlines()],
+            ]);
 
         $marketRegimeService->expects($this->once())
             ->method('getCounterTrendOpenInterestHistoryForCoin')
@@ -81,10 +86,19 @@ class CounterTrendServiceTest extends TestCase
         $this->assertSame('TESTUSDT', $stored->result['results'][0]['symbol']);
         $this->assertSame('bearish', $stored->result['results'][0]['components']['liquidity_sweep']);
         $this->assertSame('bearish', $stored->result['results'][0]['components']['mss']);
+        $this->assertTrue($stored->result['results'][0]['components']['fvg_ob_15m']);
         $this->assertTrue($stored->result['results'][0]['components']['oi_declining']);
         $this->assertTrue($stored->result['results'][0]['components']['extreme_funding']);
+        $this->assertFalse($stored->result['results'][0]['components']['derivatives_skipped']);
         $this->assertArrayHasKey('stop_loss', $stored->result['results'][0]['metadata']);
-        $this->assertArrayHasKey('fvg_zone', $stored->result['results'][0]['metadata']);
+        $this->assertSame('1H', $stored->result['results'][0]['metadata']['structure_timeframe']);
+        $this->assertSame('15M', $stored->result['results'][0]['metadata']['entry_timeframe']);
+        $this->assertSame('1D', $stored->result['results'][0]['metadata']['macro_timeframe']);
+        $this->assertTrue($stored->result['results'][0]['metadata']['macro_aligned']);
+        $this->assertTrue($stored->result['results'][0]['metadata']['coinalyze_available']);
+        $this->assertSame(2, $stored->result['results'][0]['metadata']['oi_points']);
+        $this->assertSame(2, $stored->result['results'][0]['metadata']['funding_points']);
+        $this->assertArrayHasKey('fvg_zone_15m', $stored->result['results'][0]['metadata']);
         $this->assertSame(1, $stored->supporting_data['evaluated']);
         $this->assertSame(1, $stored->supporting_data['shortlisted']);
         $this->assertCount(1, $stored->supporting_data['all_scored_results']);
@@ -143,5 +157,32 @@ class CounterTrendServiceTest extends TestCase
         }
 
         return $klines;
+    }
+
+    /**
+     * @return array<int, array<int, string|int>>
+     */
+    private function entryKlines(): array
+    {
+        return [
+            [1_700_000_000_000, '85', '90', '80', '88', '1000'],
+            [1_700_000_900_000, '88', '92', '87', '91', '1000'],
+            [1_700_001_800_000, '95', '98', '94', '96', '1000'],
+            [1_700_002_700_000, '97', '98', '95', '96', '1000'],
+            [1_700_003_600_000, '95', '96', '92', '94', '1000'],
+            [1_700_004_500_000, '93', '94', '91', '92', '1000'],
+        ];
+    }
+
+    /**
+     * @return array<int, array<int, string|int>>
+     */
+    private function macroKlines(): array
+    {
+        return [
+            [1_700_000_000_000, '100', '110', '95', '102', '1000'],
+            [1_700_086_400_000, '102', '108', '100', '101', '1000'],
+            [1_700_172_800_000, '101', '105', '99', '100', '1000'],
+        ];
     }
 }
