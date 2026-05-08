@@ -51,9 +51,9 @@ class RunAllCronJobsCommand extends Command
             CounterTrendJob::dispatchSync($executionId);
             $this->line('  ✓ CounterTrendJob completed');
 
-            // $this->info('▶ Running PrePumpJob (model run)...');
-            // PrePumpJob::dispatchSync($executionId);
-            // $this->line('  ✓ PrePumpJob completed');
+            $this->info('▶ Running PrePumpJob (model run)...');
+            PrePumpJob::dispatchSync($executionId);
+            $this->line('  ✓ PrePumpJob completed');
 
             // $this->info('▶ Running TrendMomentumJob (model run)...');
             // TrendMomentumJob::dispatchSync($executionId);
