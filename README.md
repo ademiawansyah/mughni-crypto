@@ -83,9 +83,10 @@ Add these values in `.env` (inside `mughni-crypto`):
 ```dotenv
 GITHUB_WEBHOOK_SECRET=replace_with_random_secret
 GITHUB_DEPLOY_BRANCH=main
-GITHUB_DEPLOY_REPOSITORY=OWNER/REPO
+GITHUB_DEPLOY_REPOSITORY=ademiawansyah/mughni-crypto
 GITHUB_DEPLOY_QUEUE=default
 GITHUB_DEPLOY_SCRIPT_PATH=/var/www/html/scripts/deploy-from-webhook.sh
+GITHUB_DEPLOY_TRIGGER_PATH=/var/www/html/storage/logs/deploy.trigger
 GITHUB_DEPLOY_SCRIPT_TIMEOUT=600
 ```
 
@@ -99,7 +100,8 @@ GITHUB_DEPLOY_SCRIPT_TIMEOUT=600
 ### 3a) Auto redeploy after a pull request is merged into `main`
 
 This repository includes a GitHub Actions workflow at `.github/workflows/redeploy-on-main-merge.yml`.
-It runs only when a pull request is **merged** into `main`, then connects to the server over SSH and runs:
+It runs only when a pull request is **merged** into `main`, then sends a signed `push`-style payload to the existing Laravel webhook endpoint.
+The Laravel app writes a deploy trigger file, and the host-level systemd watcher installed by `scripts/setup-ubuntu-24.04.sh` runs:
 
 ```bash
 cd /home/edualima/code/mughni-crypto
@@ -109,13 +111,14 @@ make refresh
 
 Add these repository secrets in GitHub:
 
-- `SSH_HOST` → server hostname or IP
-- `SSH_USER` → SSH username
-- `SSH_PRIVATE_KEY` → private key allowed to access the server
-- `SSH_PORT` → optional, defaults to `22`
-- `SSH_KNOWN_HOSTS` → optional, recommended for strict host verification
+- `DEPLOY_WEBHOOK_URL` → example: `https://mughni-crypto.web.id/webhook/github`
+- `DEPLOY_WEBHOOK_SECRET` → must match the server-side `GITHUB_WEBHOOK_SECRET`
 
-The Laravel webhook deploy endpoint remains available if you still want to trigger deployments manually.
+The application still enforces:
+
+- branch matches `GITHUB_DEPLOY_BRANCH`
+- repository matches `GITHUB_DEPLOY_REPOSITORY` (if set)
+- signature matches `GITHUB_WEBHOOK_SECRET`
 
 ### 4) Manual deploy script execution in app container
 
@@ -126,6 +129,7 @@ docker exec -it al_mughni bash /var/www/html/scripts/deploy-from-webhook.sh
 Deployment logs:
 - Laravel job logs: `storage/logs/deployment.log`
 - Script logs: `storage/logs/deploy-script.log`
+- Host refresh logs: `storage/logs/host-deploy.log`
 
 ## Cloudflare Tunnel (`mughni-crypto.web.id`)
 

@@ -43,6 +43,7 @@ class RunDeployScriptJob implements ShouldQueue
             'DEPLOY_COMMIT' => $commit,
             'DEPLOY_REPOSITORY' => $repository,
             'DEPLOY_BRANCH' => (string) config('deployment.allowed_branch', 'main'),
+            'DEPLOY_TRIGGER_PATH' => (string) config('deployment.trigger_path', storage_path('logs/deploy.trigger')),
             'DEPLOY_HOST_TOKEN' => (string) config('deployment.host_token', ''),
         ];
 

@@ -5,6 +5,8 @@ LOCK_FILE="/tmp/mughni-crypto-deploy.lock"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_FILE="${PROJECT_DIR}/storage/logs/deploy-script.log"
 BRANCH="${DEPLOY_BRANCH:-main}"
+TRIGGER_PATH="${DEPLOY_TRIGGER_PATH:-${PROJECT_DIR}/storage/logs/deploy.trigger}"
+TRIGGER_DIR="$(dirname "${TRIGGER_PATH}")"
 
 mkdir -p "$(dirname "${LOG_FILE}")"
 
@@ -19,9 +21,8 @@ ensure_command() {
   fi
 }
 
-ensure_command git
-ensure_command php
-ensure_command composer
+ensure_command mkdir
+ensure_command mv
 
 exec 9>"${LOCK_FILE}"
 if ! flock -n 9; then
@@ -31,50 +32,21 @@ fi
 
 cd "${PROJECT_DIR}"
 
-CURRENT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
-TARGET_REF="origin/${BRANCH}"
+mkdir -p "${TRIGGER_DIR}"
 
-log "Starting deployment (current=${CURRENT_COMMIT}, target=${TARGET_REF})"
+TRIGGER_TMP_FILE="${TRIGGER_PATH}.tmp.$$"
+REQUESTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+COMMIT="${DEPLOY_COMMIT:-}"
+REPOSITORY="${DEPLOY_REPOSITORY:-}"
 
-if ! git fetch origin "${BRANCH}" --prune; then
-  log "Failed to fetch branch ${BRANCH}"
-  exit 1
-fi
+cat > "${TRIGGER_TMP_FILE}" <<EOF
+requested_at=${REQUESTED_AT}
+repository=${REPOSITORY}
+branch=${BRANCH}
+commit=${COMMIT}
+EOF
 
-TARGET_COMMIT="$(git rev-parse --short "${TARGET_REF}" 2>/dev/null || echo '')"
-if [[ -z "${TARGET_COMMIT}" ]]; then
-  log "Unable to resolve target commit for ${TARGET_REF}"
-  exit 1
-fi
+mv "${TRIGGER_TMP_FILE}" "${TRIGGER_PATH}"
 
-if [[ "${CURRENT_COMMIT}" == "${TARGET_COMMIT}" ]]; then
-  log "Already up to date (${CURRENT_COMMIT}). Running migrations/cache refresh only."
-else
-  log "Updating code to ${TARGET_COMMIT}"
-  git reset --hard "${TARGET_REF}"
-fi
-
-log "Installing PHP dependencies"
-composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev
-
-if command -v npm >/dev/null 2>&1; then
-  log "Node.js detected. Building frontend assets"
-  npm ci
-  npm run build
-else
-  log "Node.js is not installed. Skipping frontend build"
-fi
-
-log "Running database migrations"
-php artisan migrate --force
-
-log "Refreshing Laravel caches"
-php artisan optimize:clear
-php artisan config:cache
-php artisan route:cache
-php artisan view:cache
-
-log "Restarting Horizon workers gracefully"
-php artisan horizon:terminate || true
-
-log "Deployment completed (commit=${TARGET_COMMIT})"
+log "Host deploy trigger written to ${TRIGGER_PATH} (branch=${BRANCH}, commit=${COMMIT:-unknown}, repository=${REPOSITORY:-unknown})"
+log "The host watcher will run: git pull --ff-only origin ${BRANCH} && make refresh"
