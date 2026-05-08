@@ -48,7 +48,7 @@ class PreFilterCoinService
      *
      * @return array{processed: int, valid: int, invalid: int, updated: int}
      */
-    public function filterCoins(): array
+    public function filterCoins(?string $executionId = null): array
     {
         $processed = 0;
         $valid = 0;
@@ -57,6 +57,7 @@ class PreFilterCoinService
 
         $coins = Coin::get();
         Log::info('[PreFilterCoinService] Starting Layer 2 filtering', [
+            'execution_id' => $executionId,
             'total_coins' => $coins->count(),
         ]);
         foreach ($coins as $coin) {
@@ -67,6 +68,7 @@ class PreFilterCoinService
             $reason = $validation['reason'];
 
             Log::info('[PreFilterCoinService] Validating coin', [
+                'execution_id' => $executionId,
                 'coin_id' => $coin->id,
                 'symbol' => $coin->symbol,
                 'name' => $coin->name,
@@ -105,6 +107,7 @@ class PreFilterCoinService
         }
 
         Log::info('[PreFilterCoinService] Layer 2 filtering completed', [
+            'execution_id' => $executionId,
             'processed' => $processed,
             'valid' => $valid,
             'invalid' => $invalid,
@@ -124,9 +127,9 @@ class PreFilterCoinService
      *
      * @return array{processed: int, valid: int, invalid: int, updated: int}
      */
-    public function filterCoin(): array
+    public function filterCoin(?string $executionId = null): array
     {
-        return $this->filterCoins();
+        return $this->filterCoins($executionId);
     }
 
     /**

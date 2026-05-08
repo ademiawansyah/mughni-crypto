@@ -49,7 +49,7 @@ class Layer2PreFilterCoinJob implements ShouldQueue
         }
 
         try {
-            $result = $preFilterCoinService->filterCoins();
+            $result = $preFilterCoinService->filterCoins($executionId);
 
             Log::info('[Layer2PreFilterCoinJob] Completed', [
                 'execution_id' => $executionId,

@@ -6,6 +6,8 @@ use App\Models\Coin;
 use App\Models\CoinMarketData;
 use App\Services\External\BinanceFuturesService;
 use App\Services\External\BinanceService;
+use App\Services\External\CoinalyzeService;
+use App\Services\External\CoinGeckoService;
 use Illuminate\Support\Facades\Log;
 
 class MarketRegimeService
@@ -17,6 +19,8 @@ class MarketRegimeService
     public function __construct(
         private readonly BinanceService $binanceService,
         private readonly BinanceFuturesService $binanceFuturesService,
+        private readonly CoinalyzeService $coinalyzeService,
+        private readonly CoinGeckoService $coinGeckoService,
     ) {}
 
     /**
@@ -129,6 +133,75 @@ class MarketRegimeService
     }
 
     /**
+     * @return array<int, array{timestamp: int, open_interest: float}>
+     */
+    public function getCounterTrendOpenInterestHistoryForCoin(string $symbol, string $interval = '1hour', int $limit = 24): array
+    {
+        $normalizedSymbol = strtoupper($symbol);
+        $safeLimit = max(2, min($limit, 200));
+        $cacheKey = sprintf('market_regime:coinalyze:oi_history:%s:%s:%d', $normalizedSymbol, $interval, $safeLimit);
+        $cachedData = cache()->get($cacheKey);
+
+        if (is_array($cachedData)) {
+            return $cachedData;
+        }
+
+        $history = $this->coinalyzeService->fetchOpenInterestHistory(
+            binanceSymbol: $normalizedSymbol,
+            interval: $interval,
+            limit: $safeLimit,
+        );
+
+        cache()->put($cacheKey, $history, $this->getFuturesCacheTtlSeconds());
+
+        if ($history !== []) {
+            $this->persistMarketData(
+                symbol: $normalizedSymbol,
+                dataType: 'oi_history',
+                source: 'coinalyze',
+                interval: $interval,
+                payload: $history,
+            );
+        }
+
+        return $history;
+    }
+
+    /**
+     * @return array<int, array{timestamp: int, funding_rate: float}>
+     */
+    public function getCounterTrendFundingRateHistoryForCoin(string $symbol, int $limit = 10): array
+    {
+        $normalizedSymbol = strtoupper($symbol);
+        $safeLimit = max(1, min($limit, 120));
+        $cacheKey = sprintf('market_regime:coinalyze:funding_rate:%s:%d', $normalizedSymbol, $safeLimit);
+        $cachedData = cache()->get($cacheKey);
+
+        if (is_array($cachedData)) {
+            return $cachedData;
+        }
+
+        $funding = $this->coinalyzeService->fetchFundingRateHistory(
+            binanceSymbol: $normalizedSymbol,
+            limit: $safeLimit,
+        );
+
+        cache()->put($cacheKey, $funding, $this->getFuturesCacheTtlSeconds());
+
+        if ($funding !== []) {
+            $this->persistMarketData(
+                symbol: $normalizedSymbol,
+                dataType: 'funding_rate',
+                source: 'coinalyze',
+                interval: 'daily',
+                payload: $funding,
+            );
+        }
+
+        return $funding;
+    }
+
+    /**
      * @return array{trades: array<int, array<string, mixed>>, request_params: array<string, mixed>, raw_response: array<string, mixed>}|null
      */
     public function getAggTradesForCoin(string $symbol, int $limit = 200): ?array
@@ -197,6 +270,108 @@ class MarketRegimeService
         );
 
         return $cvdMetrics;
+    }
+
+    /**
+     * Fetch Coinalyze 4H funding rate history for the Pre-Pump model.
+     *
+     * @param  string  $symbol  Binance symbol (e.g. 'BTCUSDT')
+     * @param  int  $limit  Number of 4H data points to request (default 12 = ~48H)
+     * @return array<int, array{timestamp: int, funding_rate: float}>
+     */
+    public function getPrePumpFundingRateHistory(string $symbol, int $limit = 12): array
+    {
+        $normalizedSymbol = strtoupper($symbol);
+        $safeLimit = max(1, min($limit, 120));
+        $cacheKey = sprintf('market_regime:pre_pump:funding:%s:%d', $normalizedSymbol, $safeLimit);
+        $cachedData = cache()->get($cacheKey);
+
+        if (is_array($cachedData)) {
+            return $cachedData;
+        }
+
+        $funding = $this->coinalyzeService->fetchFundingRateHistory(
+            binanceSymbol: $normalizedSymbol,
+            limit: $safeLimit,
+        );
+
+        cache()->put($cacheKey, $funding, $this->getFuturesCacheTtlSeconds());
+
+        return $funding;
+    }
+
+    /**
+     * Fetch Coinalyze 4H open interest history for the Pre-Pump model.
+     *
+     * @param  string  $symbol  Binance symbol (e.g. 'BTCUSDT')
+     * @param  string  $interval  Coinalyze interval (default '4hour')
+     * @param  int  $limit  Number of data points (default 7)
+     * @return array<int, array{timestamp: int, open_interest: float}>
+     */
+    public function getPrePumpOiHistory(string $symbol, string $interval = '4hour', int $limit = 7): array
+    {
+        $normalizedSymbol = strtoupper($symbol);
+        $safeLimit = max(2, min($limit, 200));
+        $cacheKey = sprintf('market_regime:pre_pump:oi:%s:%s:%d', $normalizedSymbol, $interval, $safeLimit);
+        $cachedData = cache()->get($cacheKey);
+
+        if (is_array($cachedData)) {
+            return $cachedData;
+        }
+
+        $history = $this->coinalyzeService->fetchOpenInterestHistory(
+            binanceSymbol: $normalizedSymbol,
+            interval: $interval,
+            limit: $safeLimit,
+        );
+
+        cache()->put($cacheKey, $history, $this->getFuturesCacheTtlSeconds());
+
+        return $history;
+    }
+
+    /**
+     * Fetch daily volume history from CoinGecko for the Pre-Pump volume-drying check.
+     *
+     * Extracts total_volumes from the /coins/{id}/market_chart response.
+     *
+     * @param  string  $coinGeckoId  CoinGecko coin ID (e.g. 'bitcoin')
+     * @param  int  $days  Number of days (default 8 to get 7-day avg + current)
+     * @return float[] Ordered list of daily volume values
+     */
+    public function getPrePumpDailyVolumes(string $coinGeckoId, int $days = 8): array
+    {
+        if ($coinGeckoId === '') {
+            return [];
+        }
+
+        $cacheKey = sprintf('market_regime:pre_pump:daily_volumes:%s:%d', $coinGeckoId, $days);
+        $cachedData = cache()->get($cacheKey);
+
+        if (is_array($cachedData)) {
+            return $cachedData;
+        }
+
+        $chart = $this->coinGeckoService->fetchMarketChart($coinGeckoId, $days, 'daily');
+
+        if ($chart === null) {
+            cache()->put($cacheKey, [], self::OHLCV_CACHE_TTL_SECONDS);
+
+            return [];
+        }
+
+        $totalVolumes = $chart['raw_response']['total_volumes'] ?? [];
+        $volumes = [];
+
+        foreach ($totalVolumes as $point) {
+            if (is_array($point) && count($point) >= 2 && is_numeric($point[1])) {
+                $volumes[] = (float) $point[1];
+            }
+        }
+
+        cache()->put($cacheKey, $volumes, self::OHLCV_CACHE_TTL_SECONDS);
+
+        return $volumes;
     }
 
     private function getFuturesCacheTtlSeconds(): int
