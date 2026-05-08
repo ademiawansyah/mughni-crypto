@@ -1,0 +1,58 @@
+name: Redeploy on main merge
+
+on:
+  pull_request:
+    types:
+      - closed
+
+concurrency:
+  group: redeploy-main
+  cancel-in-progress: false
+
+jobs:
+  redeploy:
+    name: Trigger deployment webhook
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+
+    steps:
+      - name: Send signed deploy webhook
+        env:
+          DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+          DEPLOY_WEBHOOK_SECRET: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}
+          MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          REPOSITORY_FULL_NAME: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${DEPLOY_WEBHOOK_URL}" ]]; then
+            echo "Missing DEPLOY_WEBHOOK_URL secret"
+            exit 1
+          fi
+
+          if [[ -z "${DEPLOY_WEBHOOK_SECRET}" ]]; then
+            echo "Missing DEPLOY_WEBHOOK_SECRET secret"
+            exit 1
+          fi
+
+          payload="$(jq -cn \
+            --arg ref "refs/heads/main" \
+            --arg after "${MERGE_COMMIT_SHA}" \
+            --arg repository "${REPOSITORY_FULL_NAME}" \
+            '{
+              ref: $ref,
+              after: $after,
+              repository: {
+                full_name: $repository
+              }
+            }')"
+
+          signature="sha256=$(printf '%s' "${payload}" | openssl dgst -sha256 -hmac "${DEPLOY_WEBHOOK_SECRET}" | awk '{print $2}')"
+
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: push" \
+            -H "X-Hub-Signature-256: ${signature}" \
+            -d "${payload}" \
+            "${DEPLOY_WEBHOOK_URL}"

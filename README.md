@@ -96,6 +96,22 @@ GITHUB_DEPLOY_SCRIPT_TIMEOUT=600
 - Secret: same as `GITHUB_WEBHOOK_SECRET`
 - Event: `push`
 
+### 3a) Auto redeploy after a pull request is merged into `main`
+
+This repository includes a GitHub Actions workflow at `.github/workflows/redeploy-on-main-merge.yml`.
+It runs only when a pull request is **merged** into `main`, then sends a signed `push`-style payload to the existing Laravel webhook endpoint.
+
+Add these repository secrets in GitHub:
+
+- `DEPLOY_WEBHOOK_URL` → example: `https://mughni-crypto.web.id/webhook/github`
+- `DEPLOY_WEBHOOK_SECRET` → must match the server-side `GITHUB_WEBHOOK_SECRET`
+
+The application still enforces:
+
+- branch matches `GITHUB_DEPLOY_BRANCH`
+- repository matches `GITHUB_DEPLOY_REPOSITORY` (if set)
+- signature matches `GITHUB_WEBHOOK_SECRET`
+
 The app verifies:
 - `X-Hub-Signature-256`
 - Push branch matches `GITHUB_DEPLOY_BRANCH`
