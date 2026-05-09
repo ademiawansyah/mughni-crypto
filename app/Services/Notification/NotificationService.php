@@ -2,6 +2,7 @@
 
 namespace App\Services\Notification;
 
+use App\Models\ModelScanResult;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Telegram\Bot\Laravel\Facades\Telegram;
@@ -40,9 +41,14 @@ class NotificationService
         $evaluated = (int) $payload['evaluated'];
         $shortlisted = (int) $payload['shortlisted'];
         $results = is_array($payload['results'] ?? null) ? $payload['results'] : [];
+        $detailRows = $this->resolvePassedDetailRows(
+            executionId: $executionId,
+            model: $model,
+            fallbackResults: $results,
+        );
         $modelDisplayName = $this->formatModelName($model);
 
-        if ($results === [] || $shortlisted === 0) {
+        if ($detailRows === [] || $shortlisted === 0) {
             Log::info('[NotificationService] Skipping model execution notification because no coin passed', [
                 'execution_id' => $executionId,
                 'model' => $model,
@@ -53,10 +59,10 @@ class NotificationService
             return;
         }
 
-        $top = $results[0] ?? [];
+        $top = $detailRows[0] ?? [];
         $topSymbol = (string) ($top['symbol'] ?? '-');
-        $topScore = is_numeric($top['total_score'] ?? null)
-            ? (string) $top['total_score']
+        $topScore = is_numeric($top['score'] ?? null)
+            ? (string) $top['score']
             : '-';
 
         $this->sendSystemMessage([
@@ -71,47 +77,433 @@ class NotificationService
             ],
         ]);
 
-        foreach ($results as $index => $result) {
-            $signalRow = is_array($result['signal'] ?? null)
-                ? $result['signal']
-                : $result;
-
-            $symbol = (string) ($signalRow['symbol'] ?? '-');
-            $rank = (int) ($signalRow['rank'] ?? ($result['rank'] ?? ($index + 1)));
-            $scoreValue = $signalRow['total_score'] ?? $result['score'] ?? null;
-            $score = is_numeric($scoreValue)
-                ? (string) $scoreValue
-                : '-';
-            $price = $this->formatDecimal($signalRow['price'] ?? ($result['price'] ?? null)) ?? '-';
-
-            $metadata = is_array($signalRow['metadata'] ?? null)
-                ? $signalRow['metadata']
-                : (is_array($result['metadata'] ?? null) ? $result['metadata'] : []);
-            $entryTimeframe = (string) ($metadata['entry_timeframe'] ?? '-');
-            $structureTimeframe = (string) ($metadata['structure_timeframe'] ?? '-');
-            $reason = (string) (
-                $metadata['reason']
-                ?? $metadata['strategy']
-                ?? 'Passed model criteria.'
+        foreach ($detailRows as $detailRow) {
+            $message = $this->buildModelSetupAnalysisMessage(
+                row: $detailRow,
+                model: $model,
+                modelDisplayName: $modelDisplayName,
+                executionId: $executionId,
             );
 
-            $lines = [
-                sprintf('Model: %s', $modelDisplayName),
-                sprintf('Rank: #%d', $rank),
-                sprintf('Symbol: %s', $symbol),
-                sprintf('Score: %s', $score),
-                sprintf('Price: %s', $price),
-                sprintf('Entry TF: %s', $entryTimeframe),
-                sprintf('Structure TF: %s', $structureTimeframe),
-                sprintf('Reason: %s', $reason),
-            ];
-
-            $this->sendSystemMessage([
-                'execution_id' => $executionId,
-                'title' => sprintf('%s - Passed Coin', $modelDisplayName),
-                'lines' => $lines,
-            ]);
+            $this->sendTelegramMessage(
+                message: $message,
+                executionId: $executionId,
+            );
         }
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $fallbackResults
+     * @return array<int, array<string, mixed>>
+     */
+    private function resolvePassedDetailRows(string $executionId, string $model, array $fallbackResults): array
+    {
+        $modelResult = ModelScanResult::query()
+            ->where('execution_id', $executionId)
+            ->where('model_name', $model)
+            ->latest('id')
+            ->first();
+
+        if ($modelResult !== null) {
+            $details = $modelResult->details()
+                ->with('coin:id,symbol')
+                ->where('is_passed', true)
+                ->orderByRaw('CASE WHEN rank = 0 THEN 9999 ELSE rank END')
+                ->orderByDesc('score')
+                ->get();
+
+            if ($details->isNotEmpty()) {
+                return $details->map(function ($detail): array {
+                    $data = is_array($detail->data) ? $detail->data : [];
+                    $signal = is_array($data['signal'] ?? null) ? $data['signal'] : [];
+                    $metadata = is_array($data['metadata'] ?? null) ? $data['metadata'] : [];
+                    $components = is_array($data['components'] ?? null)
+                        ? $data['components']
+                        : (is_array($signal['components'] ?? null) ? $signal['components'] : []);
+
+                    return [
+                        'rank' => (int) ($signal['rank'] ?? $detail->rank ?: 0),
+                        'symbol' => (string) ($data['symbol'] ?? $signal['symbol'] ?? ($detail->coin?->symbol ?? '-')),
+                        'price' => $signal['price'] ?? $data['price'] ?? $detail->price,
+                        'score' => $signal['total_score'] ?? $data['score'] ?? $detail->score,
+                        'signal' => $signal,
+                        'metadata' => $metadata,
+                        'components' => $components,
+                        'data' => $data,
+                    ];
+                })->values()->all();
+            }
+        }
+
+        return array_values(array_map(function (array $result, int $index): array {
+            $signal = is_array($result['signal'] ?? null) ? $result['signal'] : $result;
+            $metadata = is_array($signal['metadata'] ?? null)
+                ? $signal['metadata']
+                : (is_array($result['metadata'] ?? null) ? $result['metadata'] : []);
+            $components = is_array($signal['components'] ?? null)
+                ? $signal['components']
+                : (is_array($result['components'] ?? null) ? $result['components'] : []);
+
+            return [
+                'rank' => (int) ($signal['rank'] ?? ($result['rank'] ?? ($index + 1))),
+                'symbol' => (string) ($signal['symbol'] ?? $result['symbol'] ?? '-'),
+                'price' => $signal['price'] ?? $result['price'] ?? null,
+                'score' => $signal['total_score'] ?? $result['score'] ?? null,
+                'signal' => $signal,
+                'metadata' => $metadata,
+                'components' => $components,
+                'data' => $result,
+            ];
+        }, $fallbackResults, array_keys($fallbackResults)));
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     */
+    private function buildModelSetupAnalysisMessage(array $row, string $model, string $modelDisplayName, ?string $executionId): string
+    {
+        return match ($model) {
+            'counter_trend' => $this->buildCounterTrendSetupMessage($row, $executionId),
+            'pre_pump' => $this->buildPrePumpSetupMessage($row, $executionId),
+            'momentum' => $this->buildTrendMomentumSetupMessage($row, $executionId),
+            'spot_momentum_gainer' => $this->buildSpotMomentumSetupMessage($row, $executionId),
+            default => $this->buildGenericSetupMessage($row, $modelDisplayName, $executionId),
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     */
+    private function buildCounterTrendSetupMessage(array $row, ?string $executionId): string
+    {
+        $symbol = strtoupper((string) ($row['symbol'] ?? '-'));
+        $signal = is_array($row['signal'] ?? null) ? $row['signal'] : [];
+        $metadata = is_array($row['metadata'] ?? null) ? $row['metadata'] : [];
+        $components = is_array($row['components'] ?? null) ? $row['components'] : [];
+
+        $directionRaw = strtolower((string) ($components['liquidity_sweep'] ?? $components['mss'] ?? '-'));
+        $bias = $directionRaw === 'bullish' ? 'LONG' : ($directionRaw === 'bearish' ? 'SHORT' : '-');
+        $biasIcon = $bias === 'LONG' ? '📈' : ($bias === 'SHORT' ? '📉' : '➖');
+
+        $price = $this->formatPriceWithDollar($row['price'] ?? null);
+        $score = $this->formatScore($row['score'] ?? null);
+        $entryTf = strtoupper((string) ($metadata['entry_timeframe'] ?? '15M'));
+        $structureTf = strtoupper((string) ($metadata['structure_timeframe'] ?? '1H'));
+        $macroTf = strtoupper((string) ($metadata['macro_timeframe'] ?? '4H'));
+        $stopLoss = $this->formatPriceWithDollar($metadata['stop_loss'] ?? null);
+        $zone = (string) ($metadata['fvg_zone_15m'] ?? 'N/A');
+        $confluence = ((bool) ($metadata['macro_aligned'] ?? false)) ? 'macro aligned' : 'macro mixed';
+
+        $lines = [
+            sprintf('🎯 SETUP ANALYSIS — %s', $this->escapeForHtml($symbol)),
+            '━━━━━━━━━━━━━━━━━━━━━',
+            sprintf('💰 Live Price: %s', $this->escapeForHtml($price)),
+            '',
+            sprintf('🧭 HTF CONTEXT (%s + %s)', strtolower($structureTf), strtolower($macroTf)),
+            sprintf('%s: %s %s bias', $this->escapeForHtml($macroTf), $biasIcon, $this->escapeForHtml($bias)),
+            sprintf('%s: %s %s bias', $this->escapeForHtml($structureTf), $biasIcon, $this->escapeForHtml($bias)),
+            sprintf('Zone (%s): %s', $this->escapeForHtml($entryTf), $this->escapeForHtml($zone)),
+            sprintf('✅ HTF Confluence: %s', $this->escapeForHtml($confluence)),
+            '',
+            sprintf('📊 MTF REGIME (%s)', strtolower($entryTf)),
+            sprintf('Regime: %s', $this->escapeForHtml((string) ($metadata['strategy'] ?? 'counter-trend'))),
+            sprintf(
+                'Coinalyze: %s · OI points: %s · Funding points: %s',
+                $this->escapeForHtml(((bool) ($metadata['coinalyze_available'] ?? false)) ? 'on' : 'off'),
+                $this->escapeForHtml((string) ($metadata['oi_points'] ?? '-')),
+                $this->escapeForHtml((string) ($metadata['funding_points'] ?? '-')),
+            ),
+            '',
+            sprintf('🎯 LTF TRIGGERS (%s / %s)', strtolower($entryTf), strtolower($structureTf)),
+            sprintf('%s %s setup', $biasIcon, $this->escapeForHtml($bias)),
+            sprintf('👑 Score %s', $this->escapeForHtml($score)),
+            sprintf('Entry: %s', $this->escapeForHtml($price)),
+            sprintf('SL: %s', $this->escapeForHtml($stopLoss)),
+            sprintf('Factors: %s', $this->escapeForHtml($this->formatFactors($components))),
+        ];
+
+        if ($executionId !== null && $executionId !== '') {
+            $lines[] = sprintf('Execution ID: %s', $this->escapeForHtml($executionId));
+        }
+
+        return implode(PHP_EOL, $lines);
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     */
+    private function buildPrePumpSetupMessage(array $row, ?string $executionId): string
+    {
+        $symbol = strtoupper((string) ($row['symbol'] ?? '-'));
+        $metadata = is_array($row['metadata'] ?? null) ? $row['metadata'] : [];
+        $components = is_array($row['components'] ?? null) ? $row['components'] : [];
+
+        $price = $this->formatPriceWithDollar($row['price'] ?? null);
+        $score = $this->formatScore($row['score'] ?? null);
+        $entryTf = strtoupper((string) ($metadata['entry_timeframe'] ?? '1H'));
+        $structureTf = strtoupper((string) ($metadata['structure_timeframe'] ?? '4H'));
+
+        $lines = [
+            sprintf('🎯 SETUP ANALYSIS — %s', $this->escapeForHtml($symbol)),
+            '━━━━━━━━━━━━━━━━━━━━━',
+            sprintf('💰 Live Price: %s', $this->escapeForHtml($price)),
+            '',
+            sprintf('🧭 HTF CONTEXT (%s + %s)', strtolower($entryTf), strtolower($structureTf)),
+            sprintf('Funding 8H: %s', $this->escapeForHtml((string) ($metadata['funding_recent_8h'] ?? '-'))),
+            sprintf('OI Growth 24H: %s', $this->escapeForHtml((string) ($metadata['oi_24h_growth'] ?? '-'))),
+            sprintf('Price Range 24H: %s', $this->escapeForHtml((string) ($metadata['price_range_24h'] ?? '-'))),
+            sprintf(
+                'ATR14/Baseline: %s / %s',
+                $this->escapeForHtml((string) ($metadata['atr_14'] ?? '-')),
+                $this->escapeForHtml((string) ($metadata['atr_30d_baseline'] ?? '-')),
+            ),
+            sprintf(
+                'CVD slope: %s · RSI: %s',
+                $this->escapeForHtml((string) ($metadata['cvd_slope_24h'] ?? '-')),
+                $this->escapeForHtml((string) ($metadata['rsi_recent_4h'] ?? '-')),
+            ),
+            '',
+            sprintf('📊 MTF REGIME (%s)', strtolower($entryTf)),
+            sprintf('Regime: %s', $this->escapeForHtml((string) ($metadata['strategy'] ?? 'pre-pump accumulation'))),
+            sprintf('Volume ratio: %s', $this->escapeForHtml((string) ($metadata['volume_ratio'] ?? '-'))),
+            '',
+            '🎯 LTF TRIGGERS (signal components)',
+            sprintf('👑 Score %s', $this->escapeForHtml($score)),
+            sprintf('Factors: %s', $this->escapeForHtml($this->formatFactors($components))),
+        ];
+
+        if ($executionId !== null && $executionId !== '') {
+            $lines[] = sprintf('Execution ID: %s', $this->escapeForHtml($executionId));
+        }
+
+        return implode(PHP_EOL, $lines);
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     */
+    private function buildTrendMomentumSetupMessage(array $row, ?string $executionId): string
+    {
+        $symbol = strtoupper((string) ($row['symbol'] ?? '-'));
+        $signal = is_array($row['signal'] ?? null) ? $row['signal'] : [];
+        $metadata = is_array($row['metadata'] ?? null) ? $row['metadata'] : [];
+        $components = is_array($row['components'] ?? null) ? $row['components'] : [];
+
+        $price = $this->formatPriceWithDollar($row['price'] ?? null);
+        $score = $this->formatScore($row['score'] ?? null);
+        $entryTf = strtoupper((string) ($metadata['entry_timeframe'] ?? '4H'));
+        $structureTf = strtoupper((string) ($metadata['structure_timeframe'] ?? '1D'));
+        $stopLoss = $this->formatPriceWithDollar($metadata['stop_loss'] ?? null);
+
+        $lines = [
+            sprintf('🎯 SETUP ANALYSIS — %s', $this->escapeForHtml($symbol)),
+            '━━━━━━━━━━━━━━━━━━━━━',
+            sprintf('💰 Live Price: %s', $this->escapeForHtml($price)),
+            '',
+            sprintf('🧭 HTF CONTEXT (%s + %s)', strtolower($entryTf), strtolower($structureTf)),
+            sprintf(
+                'EMA Gate: close %s > ema50 %s > ema200 %s',
+                $this->escapeForHtml((string) ($metadata['close'] ?? '-')),
+                $this->escapeForHtml((string) ($metadata['ema50'] ?? '-')),
+                $this->escapeForHtml((string) ($metadata['ema200'] ?? '-')),
+            ),
+            sprintf(
+                'MACD: %s · Signal: %s · Hist: %s',
+                $this->escapeForHtml((string) ($metadata['macd'] ?? '-')),
+                $this->escapeForHtml((string) ($metadata['signal'] ?? '-')),
+                $this->escapeForHtml((string) ($metadata['histogram'] ?? '-')),
+            ),
+            sprintf(
+                'RSI: %s · BOS: %s',
+                $this->escapeForHtml((string) ($metadata['rsi'] ?? '-')),
+                $this->escapeForHtml(((bool) ($metadata['bos_ok'] ?? false)) ? 'yes' : 'no'),
+            ),
+            sprintf('✅ HTF Confluence: %s', $this->escapeForHtml(((bool) ($metadata['ema_gate_ok'] ?? false)) ? 'trend aligned' : 'mixed')),
+            '',
+            sprintf('📊 MTF REGIME (%s)', strtolower($entryTf)),
+            sprintf('Regime: %s', $this->escapeForHtml((string) ($metadata['strategy'] ?? 'trend momentum'))),
+            sprintf(
+                'OI growth: %s · CVD slope: %s',
+                $this->escapeForHtml((string) ($metadata['oi_growth'] ?? '-')),
+                $this->escapeForHtml((string) ($metadata['cvd_slope'] ?? '-')),
+            ),
+            '',
+            sprintf('🎯 LTF TRIGGERS (%s)', strtolower($entryTf)),
+            sprintf('📈 LONG · %s', $this->escapeForHtml((string) ($metadata['strategy'] ?? 'momentum'))),
+            sprintf('👑 Score %s', $this->escapeForHtml($score)),
+            sprintf('Entry: %s', $this->escapeForHtml($this->formatPriceWithDollar($signal['price'] ?? $row['price'] ?? null))),
+            sprintf('SL: %s', $this->escapeForHtml($stopLoss)),
+            sprintf('Factors: %s', $this->escapeForHtml($this->formatFactors($components))),
+        ];
+
+        if ($executionId !== null && $executionId !== '') {
+            $lines[] = sprintf('Execution ID: %s', $this->escapeForHtml($executionId));
+        }
+
+        return implode(PHP_EOL, $lines);
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     */
+    private function buildSpotMomentumSetupMessage(array $row, ?string $executionId): string
+    {
+        $symbol = strtoupper((string) ($row['symbol'] ?? '-'));
+        $metadata = is_array($row['metadata'] ?? null) ? $row['metadata'] : [];
+        $components = is_array($row['components'] ?? null) ? $row['components'] : [];
+
+        $price = $this->formatPriceWithDollar($row['price'] ?? null);
+        $score = $this->formatScore($row['score'] ?? null);
+        $structureTf = strtoupper((string) ($metadata['structure_timeframe'] ?? '1D'));
+        $entryTf = strtoupper((string) ($metadata['entry_timeframe'] ?? '1D'));
+        $entry = $this->formatPriceWithDollar($metadata['entry_point'] ?? $row['price'] ?? null);
+        $stopLoss = $this->formatPriceWithDollar($metadata['stop_loss'] ?? null);
+
+        $lines = [
+            sprintf('🎯 SETUP ANALYSIS — %s', $this->escapeForHtml($symbol)),
+            '━━━━━━━━━━━━━━━━━━━━━',
+            sprintf('💰 Live Price: %s', $this->escapeForHtml($price)),
+            '',
+            sprintf('🧭 HTF CONTEXT (%s + %s)', strtolower($entryTf), strtolower($structureTf)),
+            sprintf('24H Change: %s%%', $this->escapeForHtml((string) ($metadata['price_change_percentage_24h'] ?? '-'))),
+            sprintf(
+                'Body ratio: %s · Volume ratio: %s',
+                $this->escapeForHtml((string) ($metadata['body_ratio'] ?? '-')),
+                $this->escapeForHtml((string) ($metadata['volume_ratio'] ?? '-')),
+            ),
+            sprintf('Prior high: %s', $this->escapeForHtml((string) ($metadata['prior_high'] ?? '-'))),
+            sprintf('✅ HTF Confluence: %s', $this->escapeForHtml(((bool) ($components['bullish_candle_gate'] ?? false)) ? 'breakout confirmed' : 'mixed')),
+            '',
+            sprintf('📊 MTF REGIME (%s)', strtolower($entryTf)),
+            sprintf('Regime: %s', $this->escapeForHtml((string) ($metadata['strategy'] ?? 'spot momentum gainer'))),
+            sprintf('Source: %s', $this->escapeForHtml((string) ($metadata['data_source'] ?? '-'))),
+            '',
+            sprintf('🎯 LTF TRIGGERS (%s)', strtolower($entryTf)),
+            '📈 LONG · spot-only breakout',
+            sprintf('👑 Score %s', $this->escapeForHtml($score)),
+            sprintf('Entry: %s', $this->escapeForHtml($entry)),
+            sprintf('SL: %s', $this->escapeForHtml($stopLoss)),
+            sprintf('Factors: %s', $this->escapeForHtml($this->formatFactors($components))),
+        ];
+
+        if ($executionId !== null && $executionId !== '') {
+            $lines[] = sprintf('Execution ID: %s', $this->escapeForHtml($executionId));
+        }
+
+        return implode(PHP_EOL, $lines);
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     */
+    private function buildGenericSetupMessage(array $row, string $modelDisplayName, ?string $executionId): string
+    {
+        $symbol = strtoupper((string) ($row['symbol'] ?? '-'));
+        $signal = is_array($row['signal'] ?? null) ? $row['signal'] : [];
+        $metadata = is_array($row['metadata'] ?? null) ? $row['metadata'] : [];
+        $components = is_array($row['components'] ?? null) ? $row['components'] : [];
+
+        $price = $this->formatPriceWithDollar($row['price'] ?? null);
+        $score = $this->formatScore($row['score'] ?? null);
+        $direction = strtoupper((string) ($signal['direction'] ?? $metadata['direction'] ?? $metadata['bias'] ?? '-'));
+        $strategy = (string) ($metadata['strategy'] ?? $signal['strategy'] ?? $modelDisplayName);
+        $entryTimeframe = strtoupper((string) ($metadata['entry_timeframe'] ?? '15M'));
+        $structureTimeframe = strtoupper((string) ($metadata['structure_timeframe'] ?? '1H'));
+        $macroTimeframe = strtoupper((string) ($metadata['macro_timeframe'] ?? '4H'));
+        $stopLoss = $this->formatPriceWithDollar($signal['stop_loss'] ?? $metadata['stop_loss'] ?? null);
+        $entry = $this->formatPriceWithDollar($signal['entry'] ?? $signal['price'] ?? $row['price'] ?? null);
+        $takeProfit = $this->formatPriceWithDollar($signal['take_profit'] ?? $metadata['take_profit'] ?? null);
+        $takeProfit2 = $this->formatPriceWithDollar($signal['take_profit_2'] ?? $metadata['take_profit_2'] ?? null);
+        $riskReward = (string) ($metadata['risk_reward'] ?? $metadata['rr'] ?? '-');
+
+        $factors = $this->formatFactors($components);
+        $reason = (string) ($metadata['reason'] ?? $signal['reason'] ?? 'Passed model criteria.');
+
+        $lines = [
+            sprintf('🎯 SETUP ANALYSIS — %s', $this->escapeForHtml($symbol)),
+            '━━━━━━━━━━━━━━━━━━━━━',
+            sprintf('💰 Live Price: %s', $this->escapeForHtml($price)),
+            '',
+            sprintf('🧭 HTF CONTEXT (%s + %s)', strtolower($entryTimeframe), strtolower($macroTimeframe)),
+            sprintf('%s: %s', $this->escapeForHtml($macroTimeframe), $this->escapeForHtml((string) ($metadata['macro_context'] ?? 'N/A'))),
+            sprintf('%s: %s', $this->escapeForHtml($structureTimeframe), $this->escapeForHtml((string) ($metadata['structure_context'] ?? 'N/A'))),
+            sprintf('Zone (%s): %s', $this->escapeForHtml($structureTimeframe), $this->escapeForHtml((string) ($metadata['zone'] ?? 'N/A'))),
+            sprintf('Strength: %s', $this->escapeForHtml((string) ($metadata['strength'] ?? '-'))),
+            $this->escapeForHtml((string) ($metadata['trend_checks'] ?? 'Trend checks: N/A')),
+            sprintf('Demand: %s', $this->escapeForHtml((string) ($metadata['demand_zone'] ?? 'N/A'))),
+            sprintf('Supply: %s', $this->escapeForHtml((string) ($metadata['supply_zone'] ?? ($metadata['fvg_zone_15m'] ?? 'N/A')))),
+            sprintf('✅ HTF Confluence: %s', $this->escapeForHtml((string) ($metadata['confluence'] ?? 'Not specified'))),
+            '',
+            sprintf('📊 MTF REGIME (%s)', strtolower($entryTimeframe)),
+            sprintf('Regime: %s', $this->escapeForHtml((string) ($metadata['regime'] ?? 'N/A'))),
+            sprintf(
+                'ADX %s · ATR %s',
+                $this->escapeForHtml((string) ($metadata['adx'] ?? '-')),
+                $this->escapeForHtml((string) ($metadata['atr_percent'] ?? '-')),
+            ),
+            sprintf(
+                'Strategi aktif: %s',
+                $this->escapeForHtml((string) ($metadata['active_strategies'] ?? $strategy)),
+            ),
+            '',
+            sprintf('🎯 LTF TRIGGERS (%s / %s)', strtolower($entryTimeframe), strtolower($structureTimeframe)),
+            '',
+            sprintf('📉 %s · %s', $this->escapeForHtml($direction), $this->escapeForHtml($strategy)),
+            sprintf('👑 %s · Score %s', $this->escapeForHtml((string) ($metadata['tier'] ?? 'TIER -')), $this->escapeForHtml($score)),
+            sprintf('Entry: %s', $this->escapeForHtml($entry)),
+            sprintf('SL: %s · TP1: %s · TP2: %s', $this->escapeForHtml($stopLoss), $this->escapeForHtml($takeProfit), $this->escapeForHtml($takeProfit2)),
+            sprintf('RR: %s', $this->escapeForHtml($riskReward)),
+            sprintf('Factors: %s', $this->escapeForHtml($factors)),
+            sprintf('Reason: %s', $this->escapeForHtml($reason)),
+        ];
+
+        if ($executionId !== null && $executionId !== '') {
+            $lines[] = sprintf('Execution ID: %s', $this->escapeForHtml($executionId));
+        }
+
+        return implode(PHP_EOL, $lines);
+    }
+
+    /**
+     * @param  array<string, mixed>  $components
+     */
+    private function formatFactors(array $components): string
+    {
+        if ($components === []) {
+            return '-';
+        }
+
+        $factors = [];
+
+        foreach ($components as $key => $value) {
+            if (is_bool($value)) {
+                $formattedValue = $value ? 'yes' : 'no';
+            } elseif (is_scalar($value)) {
+                $formattedValue = (string) $value;
+            } else {
+                continue;
+            }
+
+            $factors[] = sprintf('%s=%s', $key, $formattedValue);
+        }
+
+        return $factors === [] ? '-' : implode(' · ', $factors);
+    }
+
+    private function formatPriceWithDollar(mixed $value): string
+    {
+        $formatted = $this->formatDecimal($value);
+
+        return $formatted === null ? '-' : '$' . $formatted;
+    }
+
+    private function formatScore(mixed $value): string
+    {
+        if (! is_numeric($value)) {
+            return '-';
+        }
+
+        return sprintf('%s/100', rtrim(rtrim(number_format((float) $value, 2, '.', ''), '0'), '.'));
     }
 
     /**

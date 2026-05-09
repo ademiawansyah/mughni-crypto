@@ -4,6 +4,7 @@ namespace App\Filament\Resources\ModelScanResults;
 
 use App\Filament\Resources\ModelScanResults\Pages\ListModelScanResults;
 use App\Filament\Resources\ModelScanResults\Pages\ViewModelScanResult;
+use App\Helpers\StringHelper;
 use App\Models\ModelScanResult;
 use BackedEnum;
 use Filament\Actions\ViewAction;
@@ -11,6 +12,7 @@ use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -40,12 +42,13 @@ class ModelScanResultResource extends Resource
             ->columns([
                 TextColumn::make('model_name')
                     ->label('Model')
-                    ->searchable(),
+                    ->state(fn (ModelScanResult $record): string => StringHelper::humanizeText($record->model_name)),
                 TextColumn::make('execution_id')
                     ->searchable()
                     ->copyable()
                     ->limit(24)
-                    ->tooltip(fn (ModelScanResult $record): string => $record->execution_id),
+                    ->tooltip(fn (ModelScanResult $record): string => $record->execution_id)
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('evaluated')
                     ->state(fn (ModelScanResult $record): int => (int) data_get($record->supporting_data, 'evaluated', 0)),
                 TextColumn::make('shortlisted')
@@ -61,7 +64,17 @@ class ModelScanResultResource extends Resource
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('created_at')
                     ->dateTime()
-                    ->sortable(),
+                    ->sortable()
+                    ->label('Cpmpleted At'),
+            ])
+            ->filters([
+                SelectFilter::make('model_name')
+                    ->options(
+                        ModelScanResult::query()
+                            ->distinct()
+                            ->pluck('model_name', 'model_name')
+                            ->toArray()
+                    ),
             ])
             ->recordUrl(fn (ModelScanResult $record): string => static::getUrl('view', ['record' => $record]))
             ->recordActions([

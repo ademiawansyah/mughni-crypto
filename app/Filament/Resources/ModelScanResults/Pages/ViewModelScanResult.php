@@ -25,7 +25,6 @@ class ViewModelScanResult extends ViewRecord
 
         return $schema->components([
             Section::make('Execution Summary')
-                ->columns(3)
                 ->schema([
                     TextEntry::make('model_name')
                         ->label('Model'),

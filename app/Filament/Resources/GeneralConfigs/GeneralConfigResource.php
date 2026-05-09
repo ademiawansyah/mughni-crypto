@@ -16,6 +16,7 @@ use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
+use Filament\Tables\Columns\TextInputColumn;
 
 class GeneralConfigResource extends Resource
 {
@@ -44,7 +45,7 @@ class GeneralConfigResource extends Resource
             ->columns([
                 TextColumn::make('key')
                     ->searchable(),
-                TextColumn::make('value'),
+                TextInputColumn::make('value'),
                 TextColumn::make('created_at')
                     ->dateTime()
                     ->sortable()

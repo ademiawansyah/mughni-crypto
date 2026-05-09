@@ -40,29 +40,68 @@ class ModelOutputStoreService
             ]);
         }
 
-        // store failed coins as supporting data details for easier querying and analysis
-        $failedCoins = is_array($supportingData['failed_coins'] ?? null)
-            ? $supportingData['failed_coins']
+        // Replace details for this execution to keep persistence idempotent.
+        ModelScanResultDetail::query()
+            ->where('model_scan_result_id', $modelScanResult->id)
+            ->delete();
+
+        $analysisResults = is_array($supportingData['analysis_results'] ?? null)
+            ? $supportingData['analysis_results']
             : [];
 
-        foreach ($failedCoins as $coinData) {
-            if (! is_array($coinData) || ! isset($coinData['id'])) {
+        foreach ($analysisResults as $analysisResult) {
+            if (! is_array($analysisResult) || ! isset($analysisResult['coin_id'])) {
                 continue;
             }
 
+            $signal = is_array($analysisResult['signal'] ?? null)
+                ? $analysisResult['signal']
+                : [];
+            $metadata = is_array($analysisResult['metadata'] ?? null)
+                ? $analysisResult['metadata']
+                : [];
+
+            $stopLossValue = $signal['stop_loss']
+                ?? $metadata['stop_loss']
+                ?? null;
+
             $this->storeSupportingData(
                 modelScanResultId: $modelScanResult->id,
-                coinId: $coinData['id'],
-                rank: $coinData['rank'] ?? 0,
-                isPassed: false,
-                price: $coinData['price'] ?? null,
-                stopLoss: $coinData['stop_loss'] ?? null,
-                score: $coinData['score'] ?? null,
-                data: [
-                    'reason' => $coinData['reason'] ?? null,
-                    'context' => $coinData['context'] ?? null,
-                ],
+                coinId: (int) $analysisResult['coin_id'],
+                rank: (int) ($signal['rank'] ?? 0),
+                isPassed: (string) ($analysisResult['analysis_status'] ?? '') === 'passed',
+                price: is_numeric($analysisResult['price'] ?? null) ? (float) $analysisResult['price'] : null,
+                stopLoss: is_numeric($stopLossValue) ? (float) $stopLossValue : null,
+                score: is_numeric($analysisResult['score'] ?? null) ? (float) $analysisResult['score'] : null,
+                data: $analysisResult,
             );
+        }
+
+        // Backward compatibility for legacy payloads without analysis_results.
+        if ($analysisResults === []) {
+            $failedCoins = is_array($supportingData['failed_coins'] ?? null)
+                ? $supportingData['failed_coins']
+                : [];
+
+            foreach ($failedCoins as $coinData) {
+                if (! is_array($coinData) || ! isset($coinData['id'])) {
+                    continue;
+                }
+
+                $this->storeSupportingData(
+                    modelScanResultId: $modelScanResult->id,
+                    coinId: (int) $coinData['id'],
+                    rank: (int) ($coinData['rank'] ?? 0),
+                    isPassed: false,
+                    price: is_numeric($coinData['price'] ?? null) ? (float) $coinData['price'] : null,
+                    stopLoss: is_numeric($coinData['stop_loss'] ?? null) ? (float) $coinData['stop_loss'] : null,
+                    score: is_numeric($coinData['score'] ?? null) ? (float) $coinData['score'] : null,
+                    data: [
+                        'reason' => $coinData['reason'] ?? null,
+                        'context' => $coinData['context'] ?? null,
+                    ],
+                );
+            }
         }
 
         return $modelScanResult;
