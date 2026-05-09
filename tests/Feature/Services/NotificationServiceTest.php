@@ -74,7 +74,12 @@ class NotificationServiceTest extends TestCase
     public function test_it_logs_error_when_telegram_send_throws_exception(): void
     {
         Log::spy();
-        Sentry::shouldReceive('captureException')->once();
+        Sentry::shouldReceive('captureException')
+            ->once()
+            ->withArgs(function ($exception): bool {
+                return $exception instanceof \Throwable
+                    && str_contains($exception->getMessage(), 'Bot [missing-bot] is not defined');
+            });
 
         config([
             'services.telegram.bot' => 'missing-bot',
