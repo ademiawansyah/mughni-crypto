@@ -19,10 +19,10 @@ class GeneralConfigSeeder extends Seeder
     public function run(): void
     {
         $defaults = [
-            'cron_enabled' => '1',
-            'counter_trend_enabled' => '1',
-            'pre_pump_enabled' => '1',
-            'momentum_enabled' => '1',
+            'cron_enabled' => '0',
+            'counter_trend_enabled' => '0',
+            'pre_pump_enabled' => '0',
+            'momentum_enabled' => '0',
         ];
 
         foreach ($defaults as $key => $value) {
