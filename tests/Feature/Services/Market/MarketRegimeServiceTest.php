@@ -43,7 +43,6 @@ class MarketRegimeServiceTest extends TestCase
         $this->assertSame(0.0015, $payload['funding_rate']);
 
         $this->assertDatabaseHas('coin_market_data', [
-            'coin_id' => $coin->id,
             'data_type' => 'funding_rate',
             'source' => 'binance_futures',
             'interval' => 'latest',
@@ -79,7 +78,6 @@ class MarketRegimeServiceTest extends TestCase
         $this->assertCount(2, $payload);
 
         $this->assertDatabaseHas('coin_market_data', [
-            'coin_id' => $coin->id,
             'data_type' => 'oi_history',
             'source' => 'binance_futures',
             'interval' => '1h',

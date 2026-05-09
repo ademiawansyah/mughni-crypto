@@ -41,7 +41,15 @@ class ModelOutputStoreService
         }
 
         // store failed coins as supporting data details for easier querying and analysis
-        foreach ($supportingData['failed_coins'] as $coinData) {
+        $failedCoins = is_array($supportingData['failed_coins'] ?? null)
+            ? $supportingData['failed_coins']
+            : [];
+
+        foreach ($failedCoins as $coinData) {
+            if (! is_array($coinData) || ! isset($coinData['id'])) {
+                continue;
+            }
+
             $this->storeSupportingData(
                 modelScanResultId: $modelScanResult->id,
                 coinId: $coinData['id'],

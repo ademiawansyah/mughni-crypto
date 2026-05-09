@@ -4,6 +4,7 @@ namespace App\Services\Market\Models;
 
 use App\Models\Coin;
 use App\Models\CoinMarketData;
+use App\Services\Market\DTO\PrePumpAnalysisDTO;
 use App\Services\Market\MarketRegimeService;
 use App\Services\Notification\NotificationService;
 use App\Services\Trading\ModelOutputStoreService;
@@ -81,7 +82,8 @@ class PrePumpService
         ]);
 
         $candidates = $this->filterCoins();
-        $signals = [];
+        $passedDtos = [];
+        $rejectedDtos = [];
         $failedCoins = [];
 
         foreach ($candidates as $coin) {
@@ -93,13 +95,24 @@ class PrePumpService
                     'symbol' => $coin->symbol,
                 ]);
 
+                $rejectedDto = PrePumpAnalysisDTO::rejected(
+                    executionId: $resolvedExecutionId,
+                    coinId: $coin->id,
+                    symbol: $coin->symbol,
+                    rejectionReason: 'missing_ohlcv',
+                    rejectionContext: [],
+                    score: 0,
+                    price: $coin->current_price,
+                );
+                $rejectedDtos[] = $rejectedDto;
+
                 $failedCoins[] = [
-                    'id' => $coin->id,
-                    'symbol' => $coin->symbol,
-                    'reason' => 'missing_ohlcv',
-                    'context' => [],
-                    'score' => 0,
-                    'price' => $coin->current_price,
+                    'id' => $rejectedDto->coin_id,
+                    'symbol' => $rejectedDto->symbol,
+                    'reason' => $rejectedDto->rejection_reason,
+                    'context' => $rejectedDto->rejection_context,
+                    'score' => $rejectedDto->score,
+                    'price' => $rejectedDto->price,
                 ];
 
                 continue;
@@ -108,13 +121,24 @@ class PrePumpService
             $analysis = $this->analyzeCoin($coin, $structureKlines, $minimumScore);
 
             if ($analysis['signal'] === null) {
+                $rejectedDto = PrePumpAnalysisDTO::rejected(
+                    executionId: $resolvedExecutionId,
+                    coinId: $coin->id,
+                    symbol: $coin->symbol,
+                    rejectionReason: (string) $analysis['rejection_reason'],
+                    rejectionContext: $analysis['rejection_context'],
+                    score: (float) $analysis['score'],
+                    price: $coin->current_price,
+                );
+                $rejectedDtos[] = $rejectedDto;
+
                 $failedCoins[] = [
-                    'id' => $coin->id,
-                    'symbol' => $coin->symbol,
-                    'reason' => $analysis['rejection_reason'],
-                    'context' => $analysis['rejection_context'],
-                    'score' => $analysis['score'],
-                    'price' => $coin->current_price,
+                    'id' => $rejectedDto->coin_id,
+                    'symbol' => $rejectedDto->symbol,
+                    'reason' => $rejectedDto->rejection_reason,
+                    'context' => $rejectedDto->rejection_context,
+                    'score' => $rejectedDto->score,
+                    'price' => $rejectedDto->price,
                 ];
 
                 Log::info('[PrePumpService] Coin rejected by analysis', [
@@ -127,20 +151,36 @@ class PrePumpService
                 continue;
             }
 
-            $signals[] = $analysis['signal'];
+            $passedDto = PrePumpAnalysisDTO::passed(
+                executionId: $resolvedExecutionId,
+                coinId: $coin->id,
+                symbol: $coin->symbol,
+                score: (float) $analysis['signal']['total_score'],
+                price: (float) $coin->current_price,
+                signal: $analysis['signal'],
+                components: $analysis['signal']['components'],
+                metadata: $analysis['signal']['metadata'],
+            );
+
+            $passedDtos[] = $passedDto;
         }
 
         usort(
-            $signals,
-            static fn(array $left, array $right): int => $right['total_score'] <=> $left['total_score'],
+            $passedDtos,
+            static fn (PrePumpAnalysisDTO $left, PrePumpAnalysisDTO $right): int => $right->score <=> $left->score,
         );
 
-        $limitedSignals = array_slice($signals, 0, self::MAX_RESULTS);
+        $limitedDtos = array_slice($passedDtos, 0, self::MAX_RESULTS);
 
         $ranked = array_values(array_map(
-            static fn(array $signal, int $index): array => array_merge($signal, ['rank' => $index + 1]),
-            $limitedSignals,
-            array_keys($limitedSignals),
+            static function (PrePumpAnalysisDTO $dto, int $index): array {
+                $signal = $dto->signal ?? [];
+                $signal['rank'] = $index + 1;
+
+                return $signal;
+            },
+            $limitedDtos,
+            array_keys($limitedDtos),
         ));
 
         $timestamp = now()->toIso8601String();
@@ -160,7 +200,14 @@ class PrePumpService
             'shortlisted' => count($ranked),
             'failed_count' => count($failedCoins),
             'minimum_score' => $minimumScore,
-            'all_scored_results' => $signals,
+            'all_scored_results' => array_values(array_map(
+                static fn (PrePumpAnalysisDTO $dto): array => (array) ($dto->signal ?? []),
+                $passedDtos,
+            )),
+            'analysis_results' => array_values(array_map(
+                static fn (PrePumpAnalysisDTO $dto): array => $dto->toArray(),
+                array_merge($passedDtos, $rejectedDtos),
+            )),
             'failed_coins' => $failedCoins,
         ];
 
@@ -251,7 +298,7 @@ class PrePumpService
         }
 
         $symbol = strtoupper($coin->symbol);
-        $pairSymbol = str_ends_with($symbol, 'USDT') ? $symbol : $symbol . 'USDT';
+        $pairSymbol = str_ends_with($symbol, 'USDT') ? $symbol : $symbol.'USDT';
 
         // --- Fetch Coinalyze derivative data and CoinGecko daily volumes ---
         $fundingData = $this->marketRegimeService->getPrePumpFundingRateHistory($pairSymbol, 12);
@@ -347,8 +394,9 @@ class PrePumpService
                     'drying_volume' => $volumeDryingResult['ok'],
                 ],
                 'metadata' => [
-                    'screening_timeframe' => '4H',
+                    'structure_timeframe' => '4H',
                     'entry_timeframe' => '1H',
+                    'strategy' => self::MODEL_NAME,
                     'coinalyze_available' => $coinalyzeAvailable,
                     'funding_recent_8h' => $fundingResult['recent_8h'],
                     'oi_24h_growth' => $oiResult['growth'],
@@ -434,7 +482,7 @@ class PrePumpService
         }
 
         $recent3 = array_slice($grouped, -3);
-        $allNegative = count(array_filter($recent3, static fn(float $r): bool => $r < -0.0005)) === 3;
+        $allNegative = count(array_filter($recent3, static fn (float $r): bool => $r < -0.0005)) === 3;
 
         return ['ok' => $allNegative, 'recent_8h' => $recent3, 'bypassed' => false];
     }
@@ -579,7 +627,7 @@ class PrePumpService
      */
     private function checkRsiCompression(array $candles): array
     {
-        $closes = array_map(static fn(array $c): float => (float) $c['close'], $candles);
+        $closes = array_map(static fn (array $c): float => (float) $c['close'], $candles);
         $rsiSeries = $this->calculateRsiSeries($closes, 14);
 
         if (count($rsiSeries) < 5) {
@@ -589,7 +637,7 @@ class PrePumpService
         $recent5 = array_slice($rsiSeries, -5);
         $allInBand = count(array_filter(
             $recent5,
-            static fn(float $r): bool => $r >= 45.0 && $r <= 55.0,
+            static fn (float $r): bool => $r >= 45.0 && $r <= 55.0,
         )) === 5;
 
         return ['ok' => $allInBand, 'recent' => $recent5];

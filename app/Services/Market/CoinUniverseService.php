@@ -291,16 +291,21 @@ class CoinUniverseService
             }
 
             foreach ($batch as $item) {
+                $fallbackName = strtoupper((string) ($item['symbol'] ?? $item['id'] ?? 'unknown'));
+                $coinDataLastUpdated = isset($item['last_updated']) && $item['last_updated'] !== ''
+                    ? (string) $item['last_updated']
+                    : null;
+
                 $result[] = [
                     'coin' => $item['id'],
                     'coin_gecko_id' => $item['id'],
                     'symbol' => $item['symbol'],
-                    'name' => $item['name'],
+                    'name' => $item['name'] ?? $fallbackName,
                     'image' => $item['image'] ?? '',
                     'market_cap' => $item['market_cap'] ?? 0.0,
                     'volume_24h' => $item['total_volume'] ?? 0.0,
                     'current_price' => $item['current_price'] ?? 0.0,
-                    'coin_data_last_updated' => $item['last_updated'] ?? '',
+                    'coin_data_last_updated' => $coinDataLastUpdated,
                     'last_fetched_at' => now()->toIso8601String(),
                     'raw_data' => json_decode((string) json_encode($item), true) ?? [],
                     // json_encode → json_decode ensures the value is a clean,

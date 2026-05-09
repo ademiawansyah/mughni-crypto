@@ -72,14 +72,21 @@ class NotificationService
         ]);
 
         foreach ($results as $index => $result) {
-            $symbol = (string) ($result['symbol'] ?? '-');
-            $rank = (int) ($result['rank'] ?? ($index + 1));
-            $score = is_numeric($result['total_score'] ?? null)
-                ? (string) $result['total_score']
-                : '-';
-            $price = $this->formatDecimal($result['price'] ?? null) ?? '-';
+            $signalRow = is_array($result['signal'] ?? null)
+                ? $result['signal']
+                : $result;
 
-            $metadata = is_array($result['metadata'] ?? null) ? $result['metadata'] : [];
+            $symbol = (string) ($signalRow['symbol'] ?? '-');
+            $rank = (int) ($signalRow['rank'] ?? ($result['rank'] ?? ($index + 1)));
+            $scoreValue = $signalRow['total_score'] ?? $result['score'] ?? null;
+            $score = is_numeric($scoreValue)
+                ? (string) $scoreValue
+                : '-';
+            $price = $this->formatDecimal($signalRow['price'] ?? ($result['price'] ?? null)) ?? '-';
+
+            $metadata = is_array($signalRow['metadata'] ?? null)
+                ? $signalRow['metadata']
+                : (is_array($result['metadata'] ?? null) ? $result['metadata'] : []);
             $entryTimeframe = (string) ($metadata['entry_timeframe'] ?? '-');
             $structureTimeframe = (string) ($metadata['structure_timeframe'] ?? '-');
             $reason = (string) (

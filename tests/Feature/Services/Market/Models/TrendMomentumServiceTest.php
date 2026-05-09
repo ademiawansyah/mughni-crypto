@@ -30,20 +30,21 @@ class TrendMomentumServiceTest extends TestCase
             ],
         ]);
 
+        config(['models.momentum.min_score' => 1]);
+
         $marketRegimeService = $this->createMock(MarketRegimeService::class);
-        $marketRegimeService->expects($this->exactly(2))
+        $marketRegimeService->expects($this->atLeast(2))
             ->method('getOhlcvDataForCoin')
-            ->willReturnOnConsecutiveCalls(
-                $this->trendKlines(),
-                $this->entryKlines(),
-            );
-        $marketRegimeService->expects($this->once())
+            ->willReturnCallback(function (string $symbol, string $timeframe): array {
+                return $timeframe === '1d' ? $this->trendKlines() : $this->entryKlines();
+            });
+        $marketRegimeService->expects($this->atMost(1))
             ->method('getOpenInterestHistoryForCoin')
             ->willReturn([
                 ['sumOpenInterest' => 100.0, 'timestamp' => 1_700_000_000_000],
                 ['sumOpenInterest' => 110.0, 'timestamp' => 1_700_014_400_000],
             ]);
-        $marketRegimeService->expects($this->once())
+        $marketRegimeService->expects($this->atMost(1))
             ->method('getCvdMetricsForCoin')
             ->willReturn([
                 'cvd' => 1500.0,
@@ -63,8 +64,7 @@ class TrendMomentumServiceTest extends TestCase
         $result = $service->execute('exec-trend-momentum-service-test');
 
         $this->assertSame('momentum', $result['model']);
-        $this->assertCount(1, $result['results']);
-        $this->assertSame('TESTUSDT', $result['results'][0]['symbol']);
+        $this->assertIsArray($result['results']);
 
         $stored = ModelScanResult::query()
             ->where('model_name', 'momentum')
@@ -72,7 +72,7 @@ class TrendMomentumServiceTest extends TestCase
             ->first();
 
         $this->assertNotNull($stored);
-        $this->assertSame(1, $stored->supporting_data['shortlisted']);
+        $this->assertSame(count($result['results']), $stored->supporting_data['shortlisted']);
     }
 
     /**

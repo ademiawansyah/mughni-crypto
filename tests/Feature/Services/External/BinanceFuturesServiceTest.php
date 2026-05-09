@@ -25,6 +25,8 @@ class BinanceFuturesServiceTest extends TestCase
 
     public function test_it_detects_usdt_perpetual_symbols_from_exchange_info(): void
     {
+        config(['market.binance_futures.enabled' => true]);
+
         Cache::flush();
 
         Http::fake([

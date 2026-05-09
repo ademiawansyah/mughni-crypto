@@ -359,7 +359,7 @@ class BinanceFuturesService
             $response = Http::timeout($this->timeout)
                 ->connectTimeout($this->timeout)
                 ->baseUrl($this->baseUrl)
-                ->retry(2, 200)
+                ->retry(2, 200, throw: false)
                 ->get($endpoint, $params);
         } catch (ConnectionException $exception) {
             Log::warning('[BinanceFuturesService] Connection failed', [

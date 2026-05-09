@@ -36,8 +36,7 @@ class NotificationServiceTest extends TestCase
                 'shortlisted' => 0,
             ]);
 
-        Log::shouldNotHaveReceived('error')
-            ->withArgs(fn (string $message): bool => $message === '[NotificationService] Telegram send failed');
+        Log::shouldNotHaveReceived('error');
     }
 
     public function test_it_skips_telegram_send_when_chat_id_is_missing(): void

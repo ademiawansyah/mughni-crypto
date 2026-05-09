@@ -3,6 +3,7 @@
 namespace App\Services\Market\Models;
 
 use App\Models\Coin;
+use App\Services\Market\DTO\CounterTrendAnalysisDTO;
 use App\Services\Market\MarketRegimeService;
 use App\Services\Notification\NotificationService;
 use App\Services\Trading\ModelOutputStoreService;
@@ -71,7 +72,8 @@ class CounterTrendService
         ]);
 
         $candidates = $this->filterCoins();
-        $signals = [];
+        $passedDtos = [];
+        $rejectedDtos = [];
         $failedCoins = [];
 
         foreach ($candidates as $coin) {
@@ -87,10 +89,23 @@ class CounterTrendService
                     'symbol' => $coin->symbol,
                 ]);
 
+                $rejectedDto = CounterTrendAnalysisDTO::rejected(
+                    executionId: $resolvedExecutionId,
+                    coinId: $coin->id,
+                    symbol: $coin->symbol,
+                    rejectionReason: 'missing_ohlcv',
+                    rejectionContext: [],
+                    score: 0.0,
+                    price: $coin->current_price,
+                );
+                $rejectedDtos[] = $rejectedDto;
                 $failedCoins[] = [
-                    'id' => $coin->id,
-                    'symbol' => $coin->symbol,
-                    'reason' => 'missing_ohlcv',
+                    'id' => $rejectedDto->coin_id,
+                    'symbol' => $rejectedDto->symbol,
+                    'reason' => $rejectedDto->rejection_reason,
+                    'context' => $rejectedDto->rejection_context,
+                    'price' => $rejectedDto->price,
+                    'score' => $rejectedDto->score,
                 ];
 
                 continue;
@@ -116,11 +131,23 @@ class CounterTrendService
             );
 
             if ($analysis['signal'] === null) {
+                $rejectedDto = CounterTrendAnalysisDTO::rejected(
+                    executionId: $resolvedExecutionId,
+                    coinId: $coin->id,
+                    symbol: $coin->symbol,
+                    rejectionReason: $analysis['rejection_reason'],
+                    rejectionContext: $analysis['rejection_context'],
+                    score: 0.0,
+                    price: $coin->current_price,
+                );
+                $rejectedDtos[] = $rejectedDto;
                 $failedCoins[] = [
-                    'id' => $coin->id,
-                    'symbol' => $coin->symbol,
-                    'reason' => $analysis['rejection_reason'],
-                    'context' => $analysis['rejection_context'],
+                    'id' => $rejectedDto->coin_id,
+                    'symbol' => $rejectedDto->symbol,
+                    'reason' => $rejectedDto->rejection_reason,
+                    'context' => $rejectedDto->rejection_context,
+                    'price' => $rejectedDto->price,
+                    'score' => $rejectedDto->score,
                 ];
 
                 Log::info('[CounterTrendService] Coin rejected by analysis', [
@@ -133,18 +160,36 @@ class CounterTrendService
                 continue;
             }
 
-            $signals[] = $analysis['signal'];
+            $passedDto = CounterTrendAnalysisDTO::passed(
+                executionId: $resolvedExecutionId,
+                coinId: $coin->id,
+                symbol: $coin->symbol,
+                score: (float) $analysis['signal']['total_score'],
+                price: $coin->current_price,
+                signal: $analysis['signal'],
+                components: $analysis['signal']['components'],
+                metadata: $analysis['signal']['metadata'],
+            );
+            $passedDtos[] = $passedDto;
         }
 
+        // Sort passed DTOs by score (descending)
         usort(
-            $signals,
-            static fn (array $left, array $right): int => $right['total_score'] <=> $left['total_score'],
+            $passedDtos,
+            static fn (CounterTrendAnalysisDTO $left, CounterTrendAnalysisDTO $right): int => $right->score <=> $left->score,
         );
 
+        // Convert top MAX_RESULTS DTOs back to arrays for output (maintaining backward compatibility)
+        $topDtos = array_slice($passedDtos, 0, self::MAX_RESULTS);
         $ranked = array_values(array_map(
-            static fn (array $signal, int $index): array => array_merge($signal, ['rank' => $index + 1]),
-            array_slice($signals, 0, self::MAX_RESULTS),
-            array_keys(array_slice($signals, 0, self::MAX_RESULTS)),
+            static function (CounterTrendAnalysisDTO $dto, int $index): array {
+                $serialized = $dto->signal ?? [];
+                $serialized['rank'] = $index + 1;
+
+                return $serialized;
+            },
+            $topDtos,
+            array_keys($topDtos),
         ));
 
         $timestamp = now()->toIso8601String();
@@ -169,7 +214,11 @@ class CounterTrendService
                 'entry' => $entryTimeframe,
                 'macro' => $macroTimeframe,
             ],
-            'all_scored_results' => $signals,
+            'all_scored_results' => $ranked,
+            'analysis_results' => array_values(array_map(
+                static fn (CounterTrendAnalysisDTO $dto): array => $dto->toArray(),
+                array_merge($passedDtos, $rejectedDtos),
+            )),
             'failed_coins' => $failedCoins,
         ];
 
@@ -260,6 +309,7 @@ class CounterTrendService
                     'required' => 20,
                     'actual' => count($candles),
                 ],
+                'score' => 0,
             ];
         }
 
@@ -272,6 +322,7 @@ class CounterTrendService
                 'rejection_context' => [
                     'direction' => $sweep['direction'],
                 ],
+                'score' => 0,
             ];
         }
 
@@ -288,6 +339,7 @@ class CounterTrendService
                 'rejection_context' => [
                     'direction' => $sweep['direction'],
                 ],
+                'score' => 0,
             ];
         }
 
@@ -300,6 +352,7 @@ class CounterTrendService
                 'rejection_context' => [
                     'direction' => $sweep['direction'],
                 ],
+                'score' => 0,
             ];
         }
 
@@ -354,6 +407,7 @@ class CounterTrendService
                     'structure_timeframe' => strtoupper($structureTimeframe),
                     'entry_timeframe' => strtoupper($entryTimeframe),
                     'macro_timeframe' => strtoupper($macroTimeframe),
+                    'strategy' => self::MODEL_NAME,
                     'macro_aligned' => $macroAligned,
                     'coinalyze_available' => $coinalyzeAvailable,
                     'oi_points' => count($oiData),
@@ -366,6 +420,7 @@ class CounterTrendService
             ],
             'rejection_reason' => null,
             'rejection_context' => [],
+            'score' => $score,
         ];
     }
 

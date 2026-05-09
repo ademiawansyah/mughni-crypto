@@ -5,6 +5,7 @@ namespace App\Services\Market\Models;
 use App\Models\Coin;
 use App\Services\External\CoinGeckoService;
 use App\Services\External\CoinMarketCapService;
+use App\Services\Market\DTO\SpotMomentumGainerAnalysisDTO;
 use App\Services\Market\MarketRegimeService;
 use App\Services\Notification\NotificationService;
 use App\Services\Trading\ModelOutputStoreService;
@@ -77,7 +78,8 @@ class SpotMomentumGainerService
 
         [$candidates, $sourceUsed] = $this->resolveTopCandidates($resolvedExecutionId);
 
-        $signals = [];
+        $passedDtos = [];
+        $rejectedDtos = [];
         $failedCoins = [];
 
         foreach ($candidates as $candidate) {
@@ -91,16 +93,27 @@ class SpotMomentumGainerService
             );
 
             if ($dailyKlines === []) {
-                $failedCoins[] = [
-                    'id' => $coin->id,
-                    'symbol' => strtoupper((string) $coin->symbol),
-                    'reason' => 'missing_ohlcv',
-                    'context' => [
+                $rejectedDto = SpotMomentumGainerAnalysisDTO::rejected(
+                    executionId: $resolvedExecutionId,
+                    coinId: $coin->id,
+                    symbol: strtoupper((string) $coin->symbol),
+                    rejectionReason: 'missing_ohlcv',
+                    rejectionContext: [
                         'timeframe' => '1d',
                         'required' => self::CANDLE_LIMIT,
                     ],
-                    'score' => 0,
-                    'price' => (float) ($coin->current_price ?? 0),
+                    score: 0,
+                    price: (float) ($coin->current_price ?? 0),
+                );
+                $rejectedDtos[] = $rejectedDto;
+
+                $failedCoins[] = [
+                    'id' => $rejectedDto->coin_id,
+                    'symbol' => $rejectedDto->symbol,
+                    'reason' => $rejectedDto->rejection_reason,
+                    'context' => $rejectedDto->rejection_context,
+                    'score' => $rejectedDto->score,
+                    'price' => $rejectedDto->price,
                 ];
 
                 continue;
@@ -115,31 +128,58 @@ class SpotMomentumGainerService
             );
 
             if ($analysis['signal'] === null) {
+                $rejectedDto = SpotMomentumGainerAnalysisDTO::rejected(
+                    executionId: $resolvedExecutionId,
+                    coinId: $coin->id,
+                    symbol: strtoupper((string) $coin->symbol),
+                    rejectionReason: (string) $analysis['rejection_reason'],
+                    rejectionContext: $analysis['rejection_context'],
+                    score: (float) $analysis['score'],
+                    price: (float) ($coin->current_price ?? 0),
+                );
+                $rejectedDtos[] = $rejectedDto;
+
                 $failedCoins[] = [
-                    'id' => $coin->id,
-                    'symbol' => strtoupper((string) $coin->symbol),
-                    'reason' => $analysis['rejection_reason'],
-                    'context' => $analysis['rejection_context'],
-                    'score' => $analysis['score'],
-                    'price' => (float) ($coin->current_price ?? 0),
+                    'id' => $rejectedDto->coin_id,
+                    'symbol' => $rejectedDto->symbol,
+                    'reason' => $rejectedDto->rejection_reason,
+                    'context' => $rejectedDto->rejection_context,
+                    'score' => $rejectedDto->score,
+                    'price' => $rejectedDto->price,
                 ];
 
                 continue;
             }
 
-            $signals[] = $analysis['signal'];
+            $passedDto = SpotMomentumGainerAnalysisDTO::passed(
+                executionId: $resolvedExecutionId,
+                coinId: $coin->id,
+                symbol: strtoupper((string) $coin->symbol),
+                score: (float) $analysis['signal']['total_score'],
+                price: (float) $analysis['signal']['price'],
+                signal: $analysis['signal'],
+                components: $analysis['signal']['components'],
+                metadata: $analysis['signal']['metadata'],
+            );
+
+            $passedDtos[] = $passedDto;
         }
 
         usort(
-            $signals,
-            static fn(array $left, array $right): int => $right['total_score'] <=> $left['total_score'],
+            $passedDtos,
+            static fn (SpotMomentumGainerAnalysisDTO $left, SpotMomentumGainerAnalysisDTO $right): int => $right->score <=> $left->score,
         );
 
-        $limitedSignals = array_slice($signals, 0, self::MAX_RESULTS);
+        $limitedDtos = array_slice($passedDtos, 0, self::MAX_RESULTS);
         $ranked = array_values(array_map(
-            static fn(array $signal, int $index): array => array_merge($signal, ['rank' => $index + 1]),
-            $limitedSignals,
-            array_keys($limitedSignals),
+            static function (SpotMomentumGainerAnalysisDTO $dto, int $index): array {
+                $signal = $dto->signal ?? [];
+                $signal['rank'] = $index + 1;
+
+                return $signal;
+            },
+            $limitedDtos,
+            array_keys($limitedDtos),
         ));
 
         $timestamp = now()->toIso8601String();
@@ -160,7 +200,14 @@ class SpotMomentumGainerService
             'failed_count' => count($failedCoins),
             'minimum_score' => $minimumScore,
             'source_used' => $sourceUsed,
-            'all_scored_results' => $signals,
+            'all_scored_results' => array_values(array_map(
+                static fn (SpotMomentumGainerAnalysisDTO $dto): array => (array) ($dto->signal ?? []),
+                $passedDtos,
+            )),
+            'analysis_results' => array_values(array_map(
+                static fn (SpotMomentumGainerAnalysisDTO $dto): array => $dto->toArray(),
+                array_merge($passedDtos, $rejectedDtos),
+            )),
             'failed_coins' => $failedCoins,
         ];
 
@@ -270,12 +317,12 @@ class SpotMomentumGainerService
 
         usort(
             $filtered,
-            static fn(array $left, array $right): int => ((float) ($right['percent_change_24h'] ?? 0) <=> (float) ($left['percent_change_24h'] ?? 0)),
+            static fn (array $left, array $right): int => ((float) ($right['percent_change_24h'] ?? 0) <=> (float) ($left['percent_change_24h'] ?? 0)),
         );
 
         $topTen = array_slice($filtered, 0, self::MAX_RESULTS);
         $symbols = array_values(array_unique(array_map(
-            static fn(array $coin): string => strtolower((string) ($coin['symbol'] ?? '')),
+            static fn (array $coin): string => strtolower((string) ($coin['symbol'] ?? '')),
             $topTen,
         )));
 
@@ -283,7 +330,7 @@ class SpotMomentumGainerService
         $coins = Coin::query()
             ->whereIn('symbol', $symbols)
             ->get()
-            ->keyBy(static fn(Coin $coin): string => strtolower((string) $coin->symbol));
+            ->keyBy(static fn (Coin $coin): string => strtolower((string) $coin->symbol));
 
         $candidates = [];
 
@@ -406,7 +453,7 @@ class SpotMomentumGainerService
 
         return [
             'signal' => [
-                'symbol' => strtoupper((string) $coin->symbol) . 'USDT',
+                'symbol' => strtoupper((string) $coin->symbol).'USDT',
                 'price' => round($price, 8),
                 'total_score' => round($totalScore, 2),
                 'components' => [
@@ -421,7 +468,7 @@ class SpotMomentumGainerService
                     'body_score' => round($bodyScore, 4),
                 ],
                 'metadata' => [
-                    'screening_timeframe' => '1D',
+                    'structure_timeframe' => '1D',
                     'entry_timeframe' => '1D',
                     'spot_only' => true,
                     'data_source' => $sourceUsed,
