@@ -101,4 +101,35 @@ class NotificationServiceTest extends TestCase
                     && isset($context['error']);
             });
     }
+
+    public function test_it_includes_passed_coins_in_model_execution_summary(): void
+    {
+        Log::spy();
+
+        config([
+            'services.telegram.bot' => 'mybot',
+            'services.telegram.chat_id' => '',
+        ]);
+
+        $service = app(NotificationService::class);
+
+        $service->sendModelExecutionResult([
+            'execution_id' => 'exec-summary-coins',
+            'model' => 'pre_pump',
+            'evaluated' => 12,
+            'shortlisted' => 2,
+            'results' => [
+                ['symbol' => 'btc/usdt', 'score' => 88.2, 'price' => 64000],
+                ['symbol' => 'eth/usdt', 'score' => 81.5, 'price' => 3200],
+            ],
+        ]);
+
+        Log::shouldHaveReceived('info')
+            ->once()
+            ->withArgs(function (string $message, array $context): bool {
+                return $message === '[NotificationService] System notification triggered'
+                    && ($context['execution_id'] ?? null) === 'exec-summary-coins'
+                    && in_array('Coins: BTC/USDT, ETH/USDT', $context['lines'] ?? [], true);
+            });
+    }
 }

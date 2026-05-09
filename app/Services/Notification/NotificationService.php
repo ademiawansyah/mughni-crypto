@@ -70,6 +70,7 @@ class NotificationService
         $topScore = is_numeric($top['score'] ?? null)
             ? (string) $top['score']
             : '-';
+        $passedCoinsSummary = $this->buildPassedCoinsSummary($detailRows);
 
         $this->sendSystemMessage([
             'execution_id' => $executionId,
@@ -78,6 +79,7 @@ class NotificationService
                 sprintf('Model: %s', $modelDisplayName),
                 sprintf('Evaluated: %d', $evaluated),
                 sprintf('Passed: %d', $shortlisted),
+                sprintf('Coins: %s', $passedCoinsSummary),
                 sprintf('Top: %s', $topSymbol),
                 sprintf('Top score: %s', $topScore),
             ],
@@ -802,6 +804,28 @@ class NotificationService
         }
 
         return implode(PHP_EOL, $messageLines);
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $detailRows
+     */
+    private function buildPassedCoinsSummary(array $detailRows): string
+    {
+        $coins = [];
+
+        foreach ($detailRows as $row) {
+            $symbol = strtoupper(trim((string) ($row['symbol'] ?? '')));
+
+            if ($symbol === '') {
+                continue;
+            }
+
+            $coins[] = $symbol;
+        }
+
+        $coins = array_values(array_unique($coins));
+
+        return $coins === [] ? '-' : implode(', ', $coins);
     }
 
     /**
