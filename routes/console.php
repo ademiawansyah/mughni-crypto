@@ -1,9 +1,11 @@
 <?php
 
+use App\Jobs\CounterTrendJob;
+use App\Jobs\DailySafeMomentumJob;
 use App\Jobs\Layer1RawCoinFetchJob;
 use App\Jobs\PrePumpJob;
+use App\Jobs\RefreshExchangeRatesJob;
 use App\Jobs\SpotMomentumGainerJob;
-use App\Jobs\CounterTrendJob;
 use App\Jobs\TrendMomentumJob;
 use App\Models\GeneralConfig;
 use App\Services\Notification\NotificationService;
@@ -11,7 +13,6 @@ use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
 use Illuminate\Support\Str;
-use App\Jobs\RefreshExchangeRatesJob;
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
@@ -62,8 +63,7 @@ Artisan::command('notification:test-telegram {--chat_id=} {--bot=} {--action=BUY
 Schedule::job(new Layer1RawCoinFetchJob)
     ->everyFiveMinutes()
     ->withoutOverlapping()
-    ->when(fn(): bool => GeneralConfig::isCronEnabled());
-
+    ->when(fn (): bool => GeneralConfig::isCronEnabled());
 
 /** * ============================================================================
  * MODEL 1: COUNTER-TREND (Every 15 minutes)
@@ -73,9 +73,8 @@ Schedule::job(new Layer1RawCoinFetchJob)
 Schedule::job(new CounterTrendJob)
     ->everyFifteenMinutes()
     ->withoutOverlapping()
-    ->when(fn(): bool => GeneralConfig::isCronEnabled())
-    ->when(fn(): bool => GeneralConfig::isModelEnabled('counter_trend'));
-
+    ->when(fn (): bool => GeneralConfig::isCronEnabled())
+    ->when(fn (): bool => GeneralConfig::isModelEnabled('counter_trend'));
 
 /**
  * ============================================================================
@@ -86,8 +85,8 @@ Schedule::job(new CounterTrendJob)
 Schedule::job(new PrePumpJob)
     ->cron((string) config('models.pre_pump.job_schedule', '0 */4 * * *'))
     ->withoutOverlapping()
-    ->when(fn(): bool => GeneralConfig::isCronEnabled())
-    ->when(fn(): bool => GeneralConfig::isModelEnabled('pre_pump'));
+    ->when(fn (): bool => GeneralConfig::isCronEnabled())
+    ->when(fn (): bool => GeneralConfig::isModelEnabled('pre_pump'));
 
 /**
  * ============================================================================
@@ -98,8 +97,8 @@ Schedule::job(new PrePumpJob)
 Schedule::job(new TrendMomentumJob)
     ->cron((string) config('models.pre_pump.job_schedule', '0 */4 * * *'))
     ->withoutOverlapping()
-    ->when(fn(): bool => GeneralConfig::isCronEnabled())
-    ->when(fn(): bool => GeneralConfig::isModelEnabled('momentum'));
+    ->when(fn (): bool => GeneralConfig::isCronEnabled())
+    ->when(fn (): bool => GeneralConfig::isModelEnabled('momentum'));
 
 /**
  * ============================================================================
@@ -112,9 +111,23 @@ Schedule::job(new SpotMomentumGainerJob)
     ->cron((string) config('models.spot_momentum_gainer.job_schedule', '0 7 * * *'))
     ->timezone('Asia/Jakarta')
     ->withoutOverlapping()
-    ->when(fn(): bool => GeneralConfig::isCronEnabled())
-    ->when(fn(): bool => GeneralConfig::isModelEnabled('spot_momentum_gainer'));
+    ->when(fn (): bool => GeneralConfig::isCronEnabled())
+    ->when(fn (): bool => GeneralConfig::isModelEnabled('spot_momentum_gainer'));
 
-Schedule::job(new RefreshExchangeRatesJob())
+/**
+ * ============================================================================
+ * MODEL 5B: DAILY SAFE MOMENTUM (Daily at 07:00 WIB)
+ * ============================================================================
+ * Runs conservative momentum continuation setup with BTC safety gate,
+ * pullback validation, and anti-euphoria filters.
+ */
+Schedule::job(new DailySafeMomentumJob)
+    ->cron((string) config('models.daily_safe_momentum.job_schedule', '0 7 * * *'))
+    ->timezone('Asia/Jakarta')
+    ->withoutOverlapping()
+    ->when(fn (): bool => GeneralConfig::isCronEnabled())
+    ->when(fn (): bool => GeneralConfig::isModelEnabled('daily_safe_momentum'));
+
+Schedule::job(new RefreshExchangeRatesJob)
     ->everyFifteenMinutes()
-    ->when(fn(): bool => GeneralConfig::isCronEnabled());
+    ->when(fn (): bool => GeneralConfig::isCronEnabled());
