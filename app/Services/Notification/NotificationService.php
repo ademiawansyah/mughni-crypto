@@ -6,6 +6,7 @@ use App\Models\GeneralConfig;
 use App\Models\ModelScanResult;
 use App\Services\Trading\ExchangeRateRepository;
 use Illuminate\Support\Facades\Log;
+use Sentry\Laravel\Facade as Sentry;
 use Illuminate\Support\Str;
 use Telegram\Bot\Laravel\Facades\Telegram;
 use Throwable;
@@ -865,6 +866,8 @@ class NotificationService
                 'chat_id' => $chatId,
                 'error' => $exception->getMessage(),
             ]);
+
+            Sentry::captureException($exception);
         }
     }
 

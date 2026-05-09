@@ -4,6 +4,7 @@ namespace Tests\Feature\Services;
 
 use App\Services\Notification\NotificationService;
 use Illuminate\Support\Facades\Log;
+use Sentry\Laravel\Facade as Sentry;
 use Tests\TestCase;
 
 class NotificationServiceTest extends TestCase
@@ -73,6 +74,7 @@ class NotificationServiceTest extends TestCase
     public function test_it_logs_error_when_telegram_send_throws_exception(): void
     {
         Log::spy();
+        Sentry::shouldReceive('captureException')->once();
 
         config([
             'services.telegram.bot' => 'missing-bot',
