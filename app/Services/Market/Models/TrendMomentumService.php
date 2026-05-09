@@ -3,6 +3,7 @@
 namespace App\Services\Market\Models;
 
 use App\Models\Coin;
+use App\Services\Market\DTO\TrendMomentumAnalysisDTO;
 use App\Services\Market\MarketRegimeService;
 use App\Services\Notification\NotificationService;
 use App\Services\Trading\ModelOutputStoreService;
@@ -69,7 +70,8 @@ class TrendMomentumService
         ]);
 
         $candidates = $this->filterCoins();
-        $signals = [];
+        $passedDtos = [];
+        $rejectedDtos = [];
         $failedCoins = [];
 
         foreach ($candidates as $coin) {
@@ -77,13 +79,24 @@ class TrendMomentumService
             $entryKlines = $this->fetchAndStoreOhlcv($coin, '4h', self::ENTRY_LIMIT);
 
             if ($trendKlines === [] || $entryKlines === []) {
+                $rejectedDto = TrendMomentumAnalysisDTO::rejected(
+                    executionId: $resolvedExecutionId,
+                    coinId: $coin->id,
+                    symbol: $coin->symbol,
+                    rejectionReason: 'missing_ohlcv',
+                    rejectionContext: [],
+                    score: 0,
+                    price: $coin->current_price,
+                );
+                $rejectedDtos[] = $rejectedDto;
+
                 $failedCoins[] = [
-                    'id' => $coin->id,
-                    'symbol' => $coin->symbol,
-                    'reason' => 'missing_ohlcv',
-                    'context' => [],
-                    'score' => 0,
-                    'price' => $coin->current_price,
+                    'id' => $rejectedDto->coin_id,
+                    'symbol' => $rejectedDto->symbol,
+                    'reason' => $rejectedDto->rejection_reason,
+                    'context' => $rejectedDto->rejection_context,
+                    'score' => $rejectedDto->score,
+                    'price' => $rejectedDto->price,
                 ];
 
                 continue;
@@ -92,32 +105,59 @@ class TrendMomentumService
             $analysis = $this->analyzeCoin($coin, $trendKlines, $entryKlines, $minimumScore);
 
             if ($analysis['signal'] === null) {
+                $rejectedDto = TrendMomentumAnalysisDTO::rejected(
+                    executionId: $resolvedExecutionId,
+                    coinId: $coin->id,
+                    symbol: $coin->symbol,
+                    rejectionReason: (string) $analysis['rejection_reason'],
+                    rejectionContext: $analysis['rejection_context'],
+                    score: (float) $analysis['score'],
+                    price: $coin->current_price,
+                );
+                $rejectedDtos[] = $rejectedDto;
+
                 $failedCoins[] = [
-                    'id' => $coin->id,
-                    'symbol' => $coin->symbol,
-                    'reason' => $analysis['rejection_reason'],
-                    'context' => $analysis['rejection_context'],
-                    'score' => $analysis['score'],
-                    'price' => $coin->current_price,
+                    'id' => $rejectedDto->coin_id,
+                    'symbol' => $rejectedDto->symbol,
+                    'reason' => $rejectedDto->rejection_reason,
+                    'context' => $rejectedDto->rejection_context,
+                    'score' => $rejectedDto->score,
+                    'price' => $rejectedDto->price,
                 ];
 
                 continue;
             }
 
-            $signals[] = $analysis['signal'];
+            $passedDto = TrendMomentumAnalysisDTO::passed(
+                executionId: $resolvedExecutionId,
+                coinId: $coin->id,
+                symbol: $coin->symbol,
+                score: (float) $analysis['signal']['total_score'],
+                price: (float) ($analysis['signal']['price'] ?? $coin->current_price),
+                signal: $analysis['signal'],
+                components: $analysis['signal']['components'],
+                metadata: $analysis['signal']['metadata'],
+            );
+
+            $passedDtos[] = $passedDto;
         }
 
         usort(
-            $signals,
-            static fn(array $left, array $right): int => $right['total_score'] <=> $left['total_score'],
+            $passedDtos,
+            static fn (TrendMomentumAnalysisDTO $left, TrendMomentumAnalysisDTO $right): int => $right->score <=> $left->score,
         );
 
-        $limitedSignals = array_slice($signals, 0, self::MAX_RESULTS);
+        $limitedDtos = array_slice($passedDtos, 0, self::MAX_RESULTS);
 
         $ranked = array_values(array_map(
-            static fn(array $signal, int $index): array => array_merge($signal, ['rank' => $index + 1]),
-            $limitedSignals,
-            array_keys($limitedSignals),
+            static function (TrendMomentumAnalysisDTO $dto, int $index): array {
+                $signal = $dto->signal ?? [];
+                $signal['rank'] = $index + 1;
+
+                return $signal;
+            },
+            $limitedDtos,
+            array_keys($limitedDtos),
         ));
 
         $timestamp = now()->toIso8601String();
@@ -137,7 +177,14 @@ class TrendMomentumService
             'shortlisted' => count($ranked),
             'failed_count' => count($failedCoins),
             'minimum_score' => $minimumScore,
-            'all_scored_results' => $signals,
+            'all_scored_results' => array_values(array_map(
+                static fn (TrendMomentumAnalysisDTO $dto): array => (array) ($dto->signal ?? []),
+                $passedDtos,
+            )),
+            'analysis_results' => array_values(array_map(
+                static fn (TrendMomentumAnalysisDTO $dto): array => $dto->toArray(),
+                array_merge($passedDtos, $rejectedDtos),
+            )),
             'failed_coins' => $failedCoins,
         ];
 
@@ -261,7 +308,7 @@ class TrendMomentumService
             ];
         }
 
-        $futuresSymbol = strtoupper($coin->symbol) . 'USDT';
+        $futuresSymbol = strtoupper($coin->symbol).'USDT';
 
         $macd = $this->scoreMacd($entryCandles);
         $rsi = $this->scoreRsi($entryCandles);
@@ -294,7 +341,7 @@ class TrendMomentumService
 
         return [
             'signal' => [
-                'symbol' => strtoupper((string) $coin->symbol) . 'USDT',
+                'symbol' => strtoupper((string) $coin->symbol).'USDT',
                 'price' => $latestPrice,
                 'total_score' => $totalScore,
                 'components' => [
@@ -306,8 +353,9 @@ class TrendMomentumService
                     'derivatives_skipped' => $derivatives['derivatives_skipped'],
                 ],
                 'metadata' => [
-                    'trend_timeframe' => '1D',
+                    'structure_timeframe' => '1D',
                     'entry_timeframe' => '4H',
+                    'strategy' => self::MODEL_NAME,
                     'stop_loss' => $stopLoss,
                     // EMA gate metadata
                     'close' => $trendScore['close'],
@@ -370,7 +418,7 @@ class TrendMomentumService
      */
     private function scoreEmaTrend(array $candles): array
     {
-        $closes = array_values(array_map(static fn(array $candle): float => $candle['close'], $candles));
+        $closes = array_values(array_map(static fn (array $candle): float => $candle['close'], $candles));
         $ema50Series = $this->calculateEmaSeries($closes, 50);
         $ema200Series = $this->calculateEmaSeries($closes, 200);
 
@@ -442,7 +490,7 @@ class TrendMomentumService
     {
         $empty = ['score' => 0, 'macd' => null, 'signal' => null, 'histogram' => null, 'histogram_prev' => null, 'macd_ok' => false];
 
-        $closes = array_values(array_map(static fn(array $candle): float => $candle['close'], $candles));
+        $closes = array_values(array_map(static fn (array $candle): float => $candle['close'], $candles));
         $ema12 = $this->calculateEmaSeries($closes, 12);
         $ema26 = $this->calculateEmaSeries($closes, 26);
 
@@ -504,7 +552,7 @@ class TrendMomentumService
      */
     private function scoreRsi(array $candles): array
     {
-        $closes = array_values(array_map(static fn(array $candle): float => $candle['close'], $candles));
+        $closes = array_values(array_map(static fn (array $candle): float => $candle['close'], $candles));
         $rsiSeries = $this->calculateRsiSeries($closes, 14);
 
         if ($rsiSeries === []) {

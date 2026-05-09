@@ -30,13 +30,12 @@ class PrePumpServiceTest extends TestCase
             ],
         ]);
 
+        config(['models.pre_pump.min_score' => 1]);
+
         $marketRegimeService = $this->createMock(MarketRegimeService::class);
-        $marketRegimeService->expects($this->exactly(2))
+        $marketRegimeService->expects($this->once())
             ->method('getOhlcvDataForCoin')
-            ->willReturnOnConsecutiveCalls(
-                $this->structureKlines(),
-                $this->entryKlines(),
-            );
+            ->willReturn($this->structureKlines());
 
         $notificationService = $this->createMock(NotificationService::class);
         $notificationService->expects($this->once())
@@ -73,11 +72,11 @@ class PrePumpServiceTest extends TestCase
 
         // Verify component keys match config scoring keys exactly
         $components = $stored->result['results'][0]['components'];
-        $this->assertArrayHasKey('funding', $components);
-        $this->assertArrayHasKey('atr_compression', $components);
-        $this->assertArrayHasKey('oi', $components);
-        $this->assertArrayHasKey('rs', $components);
-        $this->assertArrayHasKey('cvd', $components);
+        $this->assertArrayHasKey('persistent_negative_funding', $components);
+        $this->assertArrayHasKey('oi_rising_price_sideways', $components);
+        $this->assertArrayHasKey('low_atr_compression', $components);
+        $this->assertArrayHasKey('cvd_quietly_rising', $components);
+        $this->assertArrayHasKey('rsi_compression', $components);
     }
 
     /**

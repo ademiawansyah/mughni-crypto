@@ -81,19 +81,23 @@ class ShortlistedCoinsTableWidget extends TableWidget
 
         $rows = collect($results)
             ->map(function (array $item, int $index): array {
-                $entryTimeframe = (string) data_get($item, 'metadata.entry_timeframe', '-');
-                $structureTimeframe = (string) data_get($item, 'metadata.structure_timeframe', '-');
+                $signalRow = is_array(data_get($item, 'signal'))
+                    ? data_get($item, 'signal')
+                    : $item;
+
+                $entryTimeframe = (string) data_get($signalRow, 'metadata.entry_timeframe', '-');
+                $structureTimeframe = (string) data_get($signalRow, 'metadata.structure_timeframe', '-');
 
                 return [
-                    'key' => (string) ($item['rank'] ?? ($index + 1)).'-'.$index,
-                    'rank' => $item['rank'] ?? null,
-                    'symbol' => $item['symbol'] ?? '-',
-                    'price' => $item['price'] ?? null,
-                    'score' => $item['total_score'] ?? null,
-                    'stop_loss' => data_get($item, 'metadata.stop_loss'),
-                    'strategy' => data_get($item, 'metadata.strategy', '-'),
+                    'key' => (string) (data_get($signalRow, 'rank') ?? data_get($item, 'rank') ?? ($index + 1)).'-'.$index,
+                    'rank' => data_get($signalRow, 'rank') ?? data_get($item, 'rank'),
+                    'symbol' => data_get($signalRow, 'symbol', '-'),
+                    'price' => data_get($signalRow, 'price'),
+                    'score' => data_get($signalRow, 'total_score', data_get($item, 'score')),
+                    'stop_loss' => data_get($signalRow, 'metadata.stop_loss', data_get($item, 'metadata.stop_loss')),
+                    'strategy' => data_get($signalRow, 'metadata.strategy', data_get($item, 'metadata.strategy', '-')),
                     'timeframe' => trim($entryTimeframe.' / '.$structureTimeframe),
-                    'components' => data_get($item, 'components'),
+                    'components' => data_get($signalRow, 'components', data_get($item, 'components')),
                 ];
             })
             ->values();

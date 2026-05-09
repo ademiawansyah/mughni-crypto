@@ -55,13 +55,13 @@ class RunAllCronJobsCommand extends Command
             PrePumpJob::dispatchSync($executionId);
             $this->line('  ✓ PrePumpJob completed');
 
-            // $this->info('▶ Running TrendMomentumJob (model run)...');
-            // TrendMomentumJob::dispatchSync($executionId);
-            // $this->line('  ✓ TrendMomentumJob completed');
+            $this->info('▶ Running TrendMomentumJob (model run)...');
+            TrendMomentumJob::dispatchSync($executionId);
+            $this->line('  ✓ TrendMomentumJob completed');
 
-            // $this->info('▶ Running SpotMomentumGainerJob (model run)...');
-            // SpotMomentumGainerJob::dispatchSync($executionId);
-            // $this->line('  ✓ SpotMomentumGainerJob completed');
+            $this->info('▶ Running SpotMomentumGainerJob (model run)...');
+            SpotMomentumGainerJob::dispatchSync($executionId);
+            $this->line('  ✓ SpotMomentumGainerJob completed');
 
             $this->newLine();
             $this->info('✅ All cron jobs completed successfully!');

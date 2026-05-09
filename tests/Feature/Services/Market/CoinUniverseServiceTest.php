@@ -10,7 +10,7 @@ use Tests\TestCase;
 
 class CoinUniverseServiceTest extends TestCase
 {
-    public function test_it_filters_candidates_with_open_interest_threshold_and_binance_perpetual_requirement(): void
+    public function test_it_filters_candidates_with_base_rules_and_returns_ranked_universe(): void
     {
         Cache::forget('coin_universe:main');
 
@@ -35,27 +35,19 @@ class CoinUniverseServiceTest extends TestCase
             ]);
 
         $binanceFuturesService = $this->createMock(BinanceFuturesService::class);
-        $binanceFuturesService->expects($this->exactly(2))
-            ->method('hasPerpetualUsdtSymbol')
-            ->willReturnMap([
-                ['BTCUSDT', true],
-                ['ETHUSDT', true],
-            ]);
+        $binanceFuturesService->expects($this->never())
+            ->method('hasPerpetualUsdtSymbol');
 
-        $binanceFuturesService->expects($this->exactly(2))
-            ->method('fetchOpenInterestUsd')
-            ->willReturnMap([
-                ['BTCUSDT', 60000.0, 2_500_000.0],
-                ['ETHUSDT', 3000.0, 400_000.0],
-            ]);
+        $binanceFuturesService->expects($this->never())
+            ->method('fetchOpenInterestUsd');
 
         $service = new CoinUniverseService($coinGeckoService, $binanceFuturesService);
 
         $result = $service->updateUniverse('exec-universe-test');
 
-        $this->assertCount(1, $result);
+        $this->assertCount(2, $result);
         $this->assertSame('bitcoin', $result[0]['coin']);
-        $this->assertTrue($result[0]['has_binance_futures']);
-        $this->assertGreaterThanOrEqual(1_000_000.0, $result[0]['open_interest_usd']);
+        $this->assertSame('ethereum', $result[1]['coin']);
+        $this->assertSame('BTC', $result[0]['name']);
     }
 }
