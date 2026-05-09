@@ -23,6 +23,7 @@ class GeneralConfigSeeder extends Seeder
             'counter_trend_enabled' => '0',
             'pre_pump_enabled' => '0',
             'momentum_enabled' => '0',
+            'daily_safe_momentum_enabled' => '0',
         ];
 
         foreach ($defaults as $key => $value) {

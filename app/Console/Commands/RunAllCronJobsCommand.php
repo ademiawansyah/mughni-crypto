@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Jobs\CounterTrendJob;
+use App\Jobs\DailySafeMomentumJob;
 use App\Jobs\Layer1RawCoinFetchJob;
 use App\Jobs\Layer2PreFilterCoinJob;
 use App\Jobs\PrePumpJob;
@@ -62,6 +63,10 @@ class RunAllCronJobsCommand extends Command
             $this->info('▶ Running SpotMomentumGainerJob (model run)...');
             SpotMomentumGainerJob::dispatchSync($executionId);
             $this->line('  ✓ SpotMomentumGainerJob completed');
+
+            $this->info('▶ Running DailySafeMomentumJob (model run)...');
+            DailySafeMomentumJob::dispatchSync($executionId);
+            $this->line('  ✓ DailySafeMomentumJob completed');
 
             $this->newLine();
             $this->info('✅ All cron jobs completed successfully!');

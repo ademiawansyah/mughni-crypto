@@ -162,6 +162,36 @@ return [
     ],
 
     /**
+     * Daily Safe Momentum Model Configuration
+     *
+     * Model 5B scans for conservative long-only continuation setups with
+     * strict market safety gate and anti-euphoria rejection.
+     */
+    'daily_safe_momentum' => [
+        // Scoring component weights (must sum to 1.0)
+        'scoring' => [
+            'btc_market_safety' => 0.25,
+            'ema_alignment' => 0.25,
+            'rsi_health' => 0.15,
+            'macd_confirmation' => 0.15,
+            'pullback_quality' => 0.15,
+            'liquidity_quality' => 0.05,
+        ],
+
+        // Threshold for signal acceptance (0-100)
+        'min_score' => 75,
+
+        // AI is advisory-only and not used by this deterministic spot model
+        'ai_enabled' => false,
+
+        // Notification threshold (kept for consistency with other model configs)
+        'notification_threshold' => 75,
+
+        // Job schedule: daily at 07:00 WIB (Asia/Jakarta)
+        'job_schedule' => '0 7 * * *',
+    ],
+
+    /**
      * Global Market Regime Detection Configuration
      *
      * Settings for MarketRegimeService which analyzes BTC across

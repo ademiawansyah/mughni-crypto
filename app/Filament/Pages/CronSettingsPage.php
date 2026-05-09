@@ -49,6 +49,7 @@ class CronSettingsPage extends Page implements HasForms
             'counter_trend_enabled' => GeneralConfig::isModelEnabled('counter_trend'),
             'pre_pump_enabled' => GeneralConfig::isModelEnabled('pre_pump'),
             'momentum_enabled' => GeneralConfig::isModelEnabled('momentum'),
+            'daily_safe_momentum_enabled' => GeneralConfig::isModelEnabled('daily_safe_momentum'),
         ]);
     }
 
@@ -83,6 +84,10 @@ class CronSettingsPage extends Page implements HasForms
                         Toggle::make('momentum_enabled')
                             ->label('Momentum model (hourly)')
                             ->onColor('success'),
+
+                        Toggle::make('daily_safe_momentum_enabled')
+                            ->label('Daily Safe Momentum model (daily)')
+                            ->onColor('success'),
                     ]),
             ])
             ->statePath('data');
@@ -99,6 +104,7 @@ class CronSettingsPage extends Page implements HasForms
         GeneralConfig::set('counter_trend_enabled', $state['counter_trend_enabled'] ? '1' : '0');
         GeneralConfig::set('pre_pump_enabled', $state['pre_pump_enabled'] ? '1' : '0');
         GeneralConfig::set('momentum_enabled', $state['momentum_enabled'] ? '1' : '0');
+        GeneralConfig::set('daily_safe_momentum_enabled', $state['daily_safe_momentum_enabled'] ? '1' : '0');
 
         Notification::make()
             ->title('Settings saved')

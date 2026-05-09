@@ -14,4 +14,5 @@ enum ModelType: string
     case PrePump = 'pre_pump';
     case Momentum = 'momentum';
     case SpotMomentumGainer = 'spot_momentum_gainer';
+    case DailySafeMomentum = 'daily_safe_momentum';
 }

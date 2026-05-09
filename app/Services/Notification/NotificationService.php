@@ -173,6 +173,7 @@ class NotificationService
             'pre_pump' => $this->buildPrePumpSetupMessage($row, $executionId),
             'momentum' => $this->buildTrendMomentumSetupMessage($row, $executionId),
             'spot_momentum_gainer' => $this->buildSpotMomentumSetupMessage($row, $executionId),
+            'daily_safe_momentum' => $this->buildDailySafeMomentumSetupMessage($row, $executionId),
             default => $this->buildGenericSetupMessage($row, $modelDisplayName, $executionId),
         };
     }
@@ -387,6 +388,64 @@ class NotificationService
             sprintf('🎯 LTF TRIGGERS (%s)', strtolower($entryTf)),
             '📈 LONG · spot-only breakout',
             sprintf('👑 Score %s', $this->escapeForHtml($score)),
+            sprintf('Entry: %s', $this->escapeForHtml($entry)),
+            sprintf('SL: %s', $this->escapeForHtml($stopLoss)),
+            sprintf('Factors: %s', $this->escapeForHtml($this->formatFactors($components))),
+        ];
+
+        if ($executionId !== null && $executionId !== '') {
+            $lines[] = sprintf('Execution ID: %s', $this->escapeForHtml($executionId));
+        }
+
+        return implode(PHP_EOL, $lines);
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     */
+    private function buildDailySafeMomentumSetupMessage(array $row, ?string $executionId): string
+    {
+        $symbol = strtoupper((string) ($row['symbol'] ?? '-'));
+        $metadata = is_array($row['metadata'] ?? null) ? $row['metadata'] : [];
+        $components = is_array($row['components'] ?? null) ? $row['components'] : [];
+
+        $price = $this->formatPriceMultiCurrency($row['price'] ?? null);
+        $score = $this->formatScore($row['score'] ?? null);
+        $grade = strtoupper((string) ($metadata['confidence_grade'] ?? '-'));
+        $entryTf = strtoupper((string) ($metadata['entry_timeframe'] ?? '1H'));
+        $structureTf = strtoupper((string) ($metadata['structure_timeframe'] ?? '4H'));
+        $marketTf = strtoupper((string) ($metadata['market_filter_timeframe'] ?? '1D'));
+        $entry = $this->formatPriceMultiCurrency($metadata['entry_point'] ?? $row['price'] ?? null);
+        $stopLoss = $this->formatPriceMultiCurrency($metadata['stop_loss'] ?? null);
+
+        $lines = [
+            sprintf('🎯 SETUP ANALYSIS — %s', $this->escapeForHtml($symbol)),
+            '━━━━━━━━━━━━━━━━━━━━━',
+            sprintf('💰 Live Price: %s', $this->escapeForHtml($price)),
+            '',
+            sprintf('🧭 HTF CONTEXT (%s + %s + %s)', strtolower($entryTf), strtolower($structureTf), strtolower($marketTf)),
+            'Market gate: BTC safety passed',
+            sprintf(
+                'EMA: %s > %s > %s',
+                $this->escapeForHtml((string) ($metadata['ema20'] ?? '-')),
+                $this->escapeForHtml((string) ($metadata['ema50'] ?? '-')),
+                $this->escapeForHtml((string) ($metadata['ema200'] ?? '-')),
+            ),
+            sprintf(
+                'RSI: %s · MACD/Signal: %s / %s',
+                $this->escapeForHtml((string) ($metadata['rsi_trend'] ?? '-')),
+                $this->escapeForHtml((string) ($metadata['macd'] ?? '-')),
+                $this->escapeForHtml((string) ($metadata['signal'] ?? '-')),
+            ),
+            sprintf('✅ Pullback quality: %s%% depth, %s candles', $this->escapeForHtml((string) ($metadata['pullback_depth_pct'] ?? '-')), $this->escapeForHtml((string) ($metadata['pullback_duration'] ?? '-'))),
+            '',
+            sprintf('📊 MTF REGIME (%s)', strtolower($entryTf)),
+            sprintf('Regime: %s', $this->escapeForHtml((string) ($metadata['strategy'] ?? 'daily safe momentum'))),
+            sprintf('Anti-euphoria: %s', $this->escapeForHtml(((bool) ($components['anti_euphoria_passed'] ?? false)) ? 'passed' : 'failed')),
+            '',
+            sprintf('🎯 LTF TRIGGERS (%s)', strtolower($entryTf)),
+            '📈 LONG · continuation only',
+            sprintf('👑 Score %s · Grade %s', $this->escapeForHtml($score), $this->escapeForHtml($grade)),
             sprintf('Entry: %s', $this->escapeForHtml($entry)),
             sprintf('SL: %s', $this->escapeForHtml($stopLoss)),
             sprintf('Factors: %s', $this->escapeForHtml($this->formatFactors($components))),
