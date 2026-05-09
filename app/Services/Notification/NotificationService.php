@@ -2,7 +2,9 @@
 
 namespace App\Services\Notification;
 
+use App\Models\GeneralConfig;
 use App\Models\ModelScanResult;
+use App\Services\Trading\ExchangeRateRepository;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Telegram\Bot\Laravel\Facades\Telegram;
@@ -21,6 +23,10 @@ use Throwable;
  */
 class NotificationService
 {
+    public function __construct(
+        private ExchangeRateRepository $rateRepository,
+    ) {}
+
     /**
      * Send model execution notifications:
      * - One summary message per model execution
@@ -185,12 +191,12 @@ class NotificationService
         $bias = $directionRaw === 'bullish' ? 'LONG' : ($directionRaw === 'bearish' ? 'SHORT' : '-');
         $biasIcon = $bias === 'LONG' ? '📈' : ($bias === 'SHORT' ? '📉' : '➖');
 
-        $price = $this->formatPriceWithDollar($row['price'] ?? null);
+        $price = $this->formatPriceMultiCurrency($row['price'] ?? null);
         $score = $this->formatScore($row['score'] ?? null);
         $entryTf = strtoupper((string) ($metadata['entry_timeframe'] ?? '15M'));
         $structureTf = strtoupper((string) ($metadata['structure_timeframe'] ?? '1H'));
         $macroTf = strtoupper((string) ($metadata['macro_timeframe'] ?? '4H'));
-        $stopLoss = $this->formatPriceWithDollar($metadata['stop_loss'] ?? null);
+        $stopLoss = $this->formatPriceMultiCurrency($metadata['stop_loss'] ?? null);
         $zone = (string) ($metadata['fvg_zone_15m'] ?? 'N/A');
         $confluence = ((bool) ($metadata['macro_aligned'] ?? false)) ? 'macro aligned' : 'macro mixed';
 
@@ -238,7 +244,7 @@ class NotificationService
         $metadata = is_array($row['metadata'] ?? null) ? $row['metadata'] : [];
         $components = is_array($row['components'] ?? null) ? $row['components'] : [];
 
-        $price = $this->formatPriceWithDollar($row['price'] ?? null);
+        $price = $this->formatPriceMultiCurrency($row['price'] ?? null);
         $score = $this->formatScore($row['score'] ?? null);
         $entryTf = strtoupper((string) ($metadata['entry_timeframe'] ?? '1H'));
         $structureTf = strtoupper((string) ($metadata['structure_timeframe'] ?? '4H'));
@@ -289,11 +295,11 @@ class NotificationService
         $metadata = is_array($row['metadata'] ?? null) ? $row['metadata'] : [];
         $components = is_array($row['components'] ?? null) ? $row['components'] : [];
 
-        $price = $this->formatPriceWithDollar($row['price'] ?? null);
+        $price = $this->formatPriceMultiCurrency($row['price'] ?? null);
         $score = $this->formatScore($row['score'] ?? null);
         $entryTf = strtoupper((string) ($metadata['entry_timeframe'] ?? '4H'));
         $structureTf = strtoupper((string) ($metadata['structure_timeframe'] ?? '1D'));
-        $stopLoss = $this->formatPriceWithDollar($metadata['stop_loss'] ?? null);
+        $stopLoss = $this->formatPriceMultiCurrency($metadata['stop_loss'] ?? null);
 
         $lines = [
             sprintf('🎯 SETUP ANALYSIS — %s', $this->escapeForHtml($symbol)),
@@ -352,12 +358,12 @@ class NotificationService
         $metadata = is_array($row['metadata'] ?? null) ? $row['metadata'] : [];
         $components = is_array($row['components'] ?? null) ? $row['components'] : [];
 
-        $price = $this->formatPriceWithDollar($row['price'] ?? null);
+        $price = $this->formatPriceMultiCurrency($row['price'] ?? null);
         $score = $this->formatScore($row['score'] ?? null);
         $structureTf = strtoupper((string) ($metadata['structure_timeframe'] ?? '1D'));
         $entryTf = strtoupper((string) ($metadata['entry_timeframe'] ?? '1D'));
-        $entry = $this->formatPriceWithDollar($metadata['entry_point'] ?? $row['price'] ?? null);
-        $stopLoss = $this->formatPriceWithDollar($metadata['stop_loss'] ?? null);
+        $entry = $this->formatPriceMultiCurrency($metadata['entry_point'] ?? $row['price'] ?? null);
+        $stopLoss = $this->formatPriceMultiCurrency($metadata['stop_loss'] ?? null);
 
         $lines = [
             sprintf('🎯 SETUP ANALYSIS — %s', $this->escapeForHtml($symbol)),
@@ -403,15 +409,15 @@ class NotificationService
         $metadata = is_array($row['metadata'] ?? null) ? $row['metadata'] : [];
         $components = is_array($row['components'] ?? null) ? $row['components'] : [];
 
-        $price = $this->formatPriceWithDollar($row['price'] ?? null);
+        $price = $this->formatPriceMultiCurrency($row['price'] ?? null);
         $score = $this->formatScore($row['score'] ?? null);
         $direction = strtoupper((string) ($signal['direction'] ?? $metadata['direction'] ?? $metadata['bias'] ?? '-'));
         $strategy = (string) ($metadata['strategy'] ?? $signal['strategy'] ?? $modelDisplayName);
         $entryTimeframe = strtoupper((string) ($metadata['entry_timeframe'] ?? '15M'));
         $structureTimeframe = strtoupper((string) ($metadata['structure_timeframe'] ?? '1H'));
         $macroTimeframe = strtoupper((string) ($metadata['macro_timeframe'] ?? '4H'));
-        $stopLoss = $this->formatPriceWithDollar($signal['stop_loss'] ?? $metadata['stop_loss'] ?? null);
-        $entry = $this->formatPriceWithDollar($signal['entry'] ?? $signal['price'] ?? $row['price'] ?? null);
+        $stopLoss = $this->formatPriceMultiCurrency($signal['stop_loss'] ?? $metadata['stop_loss'] ?? null);
+        $entry = $this->formatPriceMultiCurrency($signal['entry'] ?? $signal['price'] ?? $row['price'] ?? null);
         $takeProfit = $this->formatPriceWithDollar($signal['take_profit'] ?? $metadata['take_profit'] ?? null);
         $takeProfit2 = $this->formatPriceWithDollar($signal['take_profit_2'] ?? $metadata['take_profit_2'] ?? null);
         $riskReward = (string) ($metadata['risk_reward'] ?? $metadata['rr'] ?? '-');
@@ -490,11 +496,112 @@ class NotificationService
         return $factors === [] ? '-' : implode(' · ', $factors);
     }
 
+    /**
+     * Format a price in multiple currencies.
+     *
+     * Displays the price in all configured display currencies.
+     * Example: "$45,230.12 / Rp 720,000,000" (USD and IDR)
+     *
+     * @param  mixed  $value  The price value in USD (or base currency)
+     * @param  string  $baseCurrency  The currency the value is in (default: 'USD')
+     * @return string Formatted price with all display currencies
+     */
+    private function formatPriceMultiCurrency(mixed $value, string $baseCurrency = 'USD'): string
+    {
+        if (! is_numeric($value)) {
+            return '-';
+        }
+
+        $baseCurrency = strtoupper($baseCurrency);
+        $displayCurrencies = GeneralConfig::getDisplayCurrencies();
+
+        // If no currencies configured or only base currency, use legacy format
+        if ($displayCurrencies === [] || ($displayCurrencies === [$baseCurrency])) {
+            return $this->formatPriceWithDollar($value);
+        }
+
+        $formattedParts = [];
+
+        foreach ($displayCurrencies as $currency) {
+            $formattedParts[] = $this->formatPriceInCurrency(
+                (float) $value,
+                $baseCurrency,
+                $currency,
+            );
+        }
+
+        return implode(' / ', array_filter($formattedParts));
+    }
+
+    /**
+     * Format a price in a specific currency.
+     *
+     * @param  float  $price  The price in the base currency
+     * @param  string  $fromCurrency  Source currency (e.g., 'USD')
+     * @param  string  $toCurrency  Target currency (e.g., 'IDR')
+     * @return string|null Formatted price with symbol, or null if conversion failed
+     */
+    private function formatPriceInCurrency(float $price, string $fromCurrency, string $toCurrency): ?string
+    {
+        $fromCurrency = strtoupper($fromCurrency);
+        $toCurrency = strtoupper($toCurrency);
+
+        // If same currency, format directly
+        if ($fromCurrency === $toCurrency) {
+            return $this->getCurrencySymbol($toCurrency).$this->formatDecimal((string) $price);
+        }
+
+        // Convert price to target currency
+        $convertedPrice = $this->rateRepository->convertPrice($price, $fromCurrency, $toCurrency);
+
+        if ($convertedPrice === null) {
+            Log::warning("Cannot format price in {$toCurrency}: rate unavailable", [
+                'from' => $fromCurrency,
+                'to' => $toCurrency,
+            ]);
+
+            return null;
+        }
+
+        $decimals = $this->getDecimalPrecision($toCurrency);
+        $formatted = number_format($convertedPrice, $decimals, '.', ',');
+
+        return $this->getCurrencySymbol($toCurrency).$formatted;
+    }
+
+    /**
+     * Get the currency symbol for formatting.
+     */
+    private function getCurrencySymbol(string $currency): string
+    {
+        return match (strtoupper($currency)) {
+            'USD', 'USDT' => '$',
+            'IDR' => 'Rp ',
+            'EUR' => '€',
+            'GBP' => '£',
+            default => $currency.' ',
+        };
+    }
+
+    /**
+     * Get the decimal precision for a specific currency.
+     *
+     * IDR uses 0 decimals (Rp 720,000,000), USD uses 2 decimals typical.
+     */
+    private function getDecimalPrecision(string $currency): int
+    {
+        return match (strtoupper($currency)) {
+            'IDR' => 0,
+            'JPY', 'KRW' => 0,
+            default => 2,
+        };
+    }
+
     private function formatPriceWithDollar(mixed $value): string
     {
         $formatted = $this->formatDecimal($value);
 
-        return $formatted === null ? '-' : '$' . $formatted;
+        return $formatted === null ? '-' : '$'.$formatted;
     }
 
     private function formatScore(mixed $value): string
@@ -594,10 +701,14 @@ class NotificationService
      */
     private function buildTradeSignalMessage(array $payload): string
     {
-        $entry = $this->formatDecimal($payload['entry'] ?? null);
-        $takeProfit = $this->formatDecimal($payload['take_profit'] ?? null);
-        $stopLoss = $this->formatDecimal($payload['stop_loss'] ?? null);
+        $entry = $payload['entry'] ?? null;
+        $takeProfit = $payload['take_profit'] ?? null;
+        $stopLoss = $payload['stop_loss'] ?? null;
         $executionId = $payload['execution_id'] ?? '-';
+
+        $entryFormatted = $entry !== null ? $this->formatPriceMultiCurrency($entry) : '-';
+        $tpFormatted = $takeProfit !== null ? $this->formatPriceMultiCurrency($takeProfit) : '-';
+        $slFormatted = $stopLoss !== null ? $this->formatPriceMultiCurrency($stopLoss) : '-';
 
         return implode(PHP_EOL, [
             '<b>AI Trading Signal</b>',
@@ -606,9 +717,9 @@ class NotificationService
             sprintf('Action: <b>%s</b>', $this->escapeForHtml((string) $payload['action'])),
             sprintf('Confidence: <b>%d%%</b>', (int) $payload['confidence']),
             sprintf('Risk: <b>%s</b>', $this->escapeForHtml((string) $payload['risk_level'])),
-            sprintf('Entry: <b>%s</b>', $entry ?? '-'),
-            sprintf('TP: <b>%s</b>', $takeProfit ?? '-'),
-            sprintf('SL: <b>%s</b>', $stopLoss ?? '-'),
+            sprintf('Entry: <b>%s</b>', $entryFormatted),
+            sprintf('TP: <b>%s</b>', $tpFormatted),
+            sprintf('SL: <b>%s</b>', $slFormatted),
             sprintf('Reason: %s', $this->escapeForHtml((string) $payload['reason'])),
             sprintf('Execution ID: <code>%s</code>', $this->escapeForHtml((string) $executionId)),
         ]);
