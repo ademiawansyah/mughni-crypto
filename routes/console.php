@@ -11,6 +11,7 @@ use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
 use Illuminate\Support\Str;
+use App\Jobs\RefreshExchangeRatesJob;
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
@@ -113,3 +114,7 @@ Schedule::job(new SpotMomentumGainerJob)
     ->withoutOverlapping()
     ->when(fn(): bool => GeneralConfig::isCronEnabled())
     ->when(fn(): bool => GeneralConfig::isModelEnabled('spot_momentum_gainer'));
+
+Schedule::job(new RefreshExchangeRatesJob())
+    ->everyFifteenMinutes()
+    ->when(fn(): bool => GeneralConfig::isCronEnabled());

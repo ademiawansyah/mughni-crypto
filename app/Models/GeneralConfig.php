@@ -84,7 +84,7 @@ class GeneralConfig extends Model
         $coins = static::getArray('coins', self::DEFAULT_COINS);
 
         $normalized = array_values(array_unique(array_filter(array_map(
-            static fn(string $coin): string => strtolower(trim($coin)),
+            static fn (string $coin): string => strtolower(trim($coin)),
             $coins,
         ))));
 
@@ -111,9 +111,9 @@ class GeneralConfig extends Model
         $timeframes = static::getArray('timeframes', self::DEFAULT_TIMEFRAMES);
 
         $normalized = array_values(array_unique(array_filter(array_map(
-            static fn(string $timeframe): string => strtolower(trim($timeframe)),
+            static fn (string $timeframe): string => strtolower(trim($timeframe)),
             $timeframes,
-        ), static fn(string $timeframe): bool => preg_match('/^\d+(m|h|d)$/', $timeframe) === 1)));
+        ), static fn (string $timeframe): bool => preg_match('/^\d+(m|h|d)$/', $timeframe) === 1)));
 
         return $normalized === [] ? self::DEFAULT_TIMEFRAMES : $normalized;
     }
@@ -157,5 +157,62 @@ class GeneralConfig extends Model
         } catch (\Throwable) {
             return true;
         }
+    }
+
+    /**
+     * Get the list of currencies to display in notifications.
+     *
+     * @return array<string> Array of currency codes (e.g., ['USD', 'IDR'])
+     */
+    public static function getDisplayCurrencies(): array
+    {
+        $currencies = static::getArray('display_currencies', ['USD']);
+
+        $normalized = array_values(array_unique(array_filter(array_map(
+            static fn (string $currency): string => strtoupper(trim($currency)),
+            $currencies,
+        ))));
+
+        return $normalized === [] ? ['USD'] : $normalized;
+    }
+
+    /**
+     * Enable a currency for display in notifications.
+     *
+     * @param  string  $currency  Currency code (e.g., 'IDR')
+     */
+    public static function enableDisplayCurrency(string $currency): void
+    {
+        $currencies = static::getDisplayCurrencies();
+        $currency = strtoupper(trim($currency));
+
+        if (! in_array($currency, $currencies, true)) {
+            $currencies[] = $currency;
+            static::set('display_currencies', implode(',', $currencies));
+        }
+    }
+
+    /**
+     * Disable a currency from display in notifications.
+     *
+     * @param  string  $currency  Currency code (e.g., 'IDR')
+     */
+    public static function disableDisplayCurrency(string $currency): void
+    {
+        $currencies = static::getDisplayCurrencies();
+        $currency = strtoupper(trim($currency));
+
+        $currencies = array_filter($currencies, static fn (string $c): bool => $c !== $currency);
+        static::set('display_currencies', implode(',', array_values($currencies)));
+    }
+
+    /**
+     * Check if a currency is enabled for display.
+     *
+     * @param  string  $currency  Currency code (e.g., 'IDR')
+     */
+    public static function isDisplayCurrencyEnabled(string $currency): bool
+    {
+        return in_array(strtoupper(trim($currency)), static::getDisplayCurrencies(), true);
     }
 }
