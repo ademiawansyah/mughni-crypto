@@ -25,7 +25,7 @@ class ShortlistedCoinsTableWidget extends TableWidget
         return $table
             ->heading('Shortlisted Coins')
             ->description('Generated from result.results payload')
-            ->records(fn (int $page, int $recordsPerPage): LengthAwarePaginator => $this->shortlistedPaginator($page, $recordsPerPage))
+            ->records(fn(int $page, int $recordsPerPage): LengthAwarePaginator => $this->shortlistedPaginator($page, $recordsPerPage))
             ->queryStringIdentifier('shortlistedCoins')
             ->defaultPaginationPageOption(10)
             ->paginationPageOptions([10])
@@ -66,7 +66,17 @@ class ShortlistedCoinsTableWidget extends TableWidget
                     ->label('Calculation Components')
                     ->extraHeaderAttributes(['class' => 'min-w-[28rem]'])
                     ->html()
-                    ->formatStateUsing(fn (mixed $state): string => $this->asCollapsibleJson($state, 'Show components'))
+                    ->getStateUsing(function (mixed $record): string {
+                        $components = data_get($record, 'components');
+
+                        if (! is_array($components) || count($components) === 0) {
+                            return '-';
+                        }
+
+                        $content = $this->contextAsKeyValue($components);
+
+                        return $content !== '-' ? $this->renderCollapsible($content, 'Show components') : '-';
+                    })
                     ->wrap(),
             ]);
     }
@@ -89,14 +99,14 @@ class ShortlistedCoinsTableWidget extends TableWidget
                 $structureTimeframe = (string) data_get($signalRow, 'metadata.structure_timeframe', '-');
 
                 return [
-                    'key' => (string) (data_get($signalRow, 'rank') ?? data_get($item, 'rank') ?? ($index + 1)).'-'.$index,
+                    'key' => (string) (data_get($signalRow, 'rank') ?? data_get($item, 'rank') ?? ($index + 1)) . '-' . $index,
                     'rank' => data_get($signalRow, 'rank') ?? data_get($item, 'rank'),
                     'symbol' => data_get($signalRow, 'symbol', '-'),
                     'price' => data_get($signalRow, 'price'),
                     'score' => data_get($signalRow, 'total_score', data_get($item, 'score')),
                     'stop_loss' => data_get($signalRow, 'metadata.stop_loss', data_get($item, 'metadata.stop_loss')),
                     'strategy' => data_get($signalRow, 'metadata.strategy', data_get($item, 'metadata.strategy', '-')),
-                    'timeframe' => trim($entryTimeframe.' / '.$structureTimeframe),
+                    'timeframe' => trim($entryTimeframe . ' / ' . $structureTimeframe),
                     'components' => data_get($signalRow, 'components', data_get($item, 'components')),
                 ];
             })
@@ -118,26 +128,72 @@ class ShortlistedCoinsTableWidget extends TableWidget
         );
     }
 
-    private function prettyJson(mixed $value): string
+    private function contextAsKeyValue(mixed $value): string
     {
-        if (! is_array($value) || $value === []) {
+        if (! is_array($value) || count($value) === 0) {
             return '-';
         }
 
-        return (string) json_encode($value, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        $lines = $this->flattenContextLines($value);
+
+        if (count($lines) === 0) {
+            return '-';
+        }
+
+        return implode(PHP_EOL, $lines);
     }
 
-    private function asCollapsibleJson(mixed $value, string $label): string
+    /**
+     * @param  array<int|string, mixed>  $value
+     * @return list<string>
+     */
+    private function flattenContextLines(array $value, string $prefix = ''): array
     {
-        $json = $this->prettyJson($value);
+        $lines = [];
 
-        if ($json === '-') {
-            return '-';
+        foreach ($value as $key => $item) {
+            $currentKey = $prefix === '' ? (string) $key : $prefix . '.' . $key;
+
+            if (is_array($item)) {
+                if ($item === []) {
+                    $lines[] = $currentKey . ' : []';
+
+                    continue;
+                }
+
+                $lines = array_merge($lines, $this->flattenContextLines($item, $currentKey));
+
+                continue;
+            }
+
+            $lines[] = $currentKey . ' : ' . $this->stringifyContextValue($item);
         }
 
-        $escaped = e($json);
+        return $lines;
+    }
+
+    private function stringifyContextValue(mixed $value): string
+    {
+        if ($value === null) {
+            return 'null';
+        }
+
+        if (is_bool($value)) {
+            return $value ? 'true' : 'false';
+        }
+
+        if (is_scalar($value)) {
+            return (string) $value;
+        }
+
+        return (string) json_encode($value, JSON_UNESCAPED_SLASHES);
+    }
+
+    private function renderCollapsible(string $content, string $label): string
+    {
+        $escaped = e($content);
         $summary = e($label);
 
-        return '<details class="text-xs"><summary class="cursor-pointer text-primary-600">'.$summary.'</summary><pre class="mt-2 whitespace-pre-wrap text-xs leading-5">'.$escaped.'</pre></details>';
+        return '<details class="text-xs"><summary class="cursor-pointer text-primary-600">' . $summary . '</summary><pre class="mt-2 whitespace-pre-wrap text-xs leading-5">' . $escaped . '</pre></details>';
     }
 }
