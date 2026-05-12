@@ -1,0 +1,435 @@
+# Crypto AI Advisor — Pipeline Requirements (HTML Format)
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crypto AI Advisor - Pipeline Requirements</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f7f7f7;
+      color: #222;
+      margin: 0;
+      padding: 40px;
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: auto;
+      background: #fff;
+      padding: 40px;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+    }
+
+    h1, h2, h3 {
+      margin-top: 32px;
+      color: #1c1c1c;
+    }
+
+    h1 {
+      margin-top: 0;
+      border-bottom: 2px solid #e5e5e5;
+      padding-bottom: 16px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+    }
+
+    table th,
+    table td {
+      border: 1px solid #ddd;
+      padding: 12px;
+      vertical-align: top;
+    }
+
+    table th {
+      background: #f0f0f0;
+      text-align: left;
+    }
+
+    .section {
+      margin-top: 40px;
+    }
+
+    ul {
+      margin-top: 8px;
+    }
+
+    .highlight {
+      background: #eef7ff;
+      border-left: 4px solid #4f8cff;
+      padding: 16px;
+      border-radius: 6px;
+      margin-top: 16px;
+    }
+
+    .warning {
+      background: #fff6f6;
+      border-left: 4px solid #ff4d4f;
+      padding: 16px;
+      border-radius: 6px;
+      margin-top: 16px;
+    }
+
+    code {
+      background: #f4f4f4;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <h1>Crypto AI Advisor — Multi-Model Pipeline Requirements</h1>
+
+    <div class="highlight">
+      Objective: Build an efficient multi-layer crypto signal pipeline that minimizes API usage while maximizing high-quality trade opportunities using shared market data, multiple analysis models, and a final confluence validation layer.
+    </div>
+
+    <div class="section">
+      <h2>1. System Architecture Overview</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Layer</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Layer 1</td>
+            <td>Shared market data fetch from CoinGecko API.</td>
+          </tr>
+          <tr>
+            <td>Layer 2</td>
+            <td>Shared pre-filter to remove low-quality coins.</td>
+          </tr>
+          <tr>
+            <td>Layer 3</td>
+            <td>Model-specific filtering and heavy analysis.</td>
+          </tr>
+          <tr>
+            <td>Layer 4</td>
+            <td>Watchlist generation and logging.</td>
+          </tr>
+          <tr>
+            <td>Layer 5</td>
+            <td>Final confluence validation before entry recommendation.</td>
+          </tr>
+          <tr>
+            <td>Entry Layer</td>
+            <td>Trader confirmation panel with manual execution.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>2. Shared Data Fetch Requirements</h2>
+
+      <h3>2.1 Data Source</h3>
+      <ul>
+        <li>Use CoinGecko Top 300 market API.</li>
+        <li>Fetch market cap, volume, and 24h change data.</li>
+        <li>Single API request shared across all models.</li>
+      </ul>
+
+      <h3>2.2 Cache Strategy</h3>
+      <ul>
+        <li>Cache duration: 5 minutes.</li>
+        <li>All downstream models must reuse cached data.</li>
+        <li>Prevent duplicated API calls across models.</li>
+      </ul>
+
+      <h3>2.3 Required Fields</h3>
+      <ul>
+        <li>Coin symbol</li>
+        <li>Coin ID</li>
+        <li>Market cap</li>
+        <li>24h trading volume</li>
+        <li>24h price change percentage</li>
+        <li>Rank</li>
+        <li>Current price</li>
+      </ul>
+    </div>
+
+    <div class="section">
+      <h2>3. Shared Pre-Filter Requirements</h2>
+
+      <h3>3.1 Filtering Objective</h3>
+      <p>Reduce total candidate coins from approximately 300 coins into 150–200 valid trading candidates.</p>
+
+      <h3>3.2 Remove Criteria</h3>
+      <ul>
+        <li>Stablecoins</li>
+        <li>Wrapped tokens</li>
+        <li>Coins with volume below $1M</li>
+        <li>Coins with market cap below $50M</li>
+        <li>Coins with incomplete or null data</li>
+      </ul>
+
+      <h3>3.3 Expected Output</h3>
+      <ul>
+        <li>Filtered shared dataset accessible by all models.</li>
+        <li>Dataset must be cached and reusable.</li>
+      </ul>
+    </div>
+
+    <div class="section">
+      <h2>4. Model Requirements</h2>
+
+      <h3>4.1 Model 1 — Counter Trend</h3>
+
+      <table>
+        <tbody>
+          <tr>
+            <th>Target Coins</th>
+            <td>Rank 50–300 with volume above $5M</td>
+          </tr>
+          <tr>
+            <th>Strategy Type</th>
+            <td>Counter-trend reversal detection</td>
+          </tr>
+          <tr>
+            <th>Heavy Analysis</th>
+            <td>
+              <ul>
+                <li>OHLCV 15m and 4H</li>
+                <li>Open Interest (OI)</li>
+                <li>CVD analysis</li>
+                <li>Liquidity sweep detection</li>
+                <li>Market structure shift (MSS)</li>
+              </ul>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>4.2 Model 2 — Pre-Pump Detection</h3>
+
+      <table>
+        <tbody>
+          <tr>
+            <th>Target Coins</th>
+            <td>Rank 20–150 with volume above $10M</td>
+          </tr>
+          <tr>
+            <th>Strategy Type</th>
+            <td>Early accumulation and breakout preparation</td>
+          </tr>
+          <tr>
+            <th>Heavy Analysis</th>
+            <td>
+              <ul>
+                <li>Funding rate</li>
+                <li>Open Interest (OI)</li>
+                <li>ATR analysis</li>
+                <li>CVD compression</li>
+                <li>OHLCV 4H</li>
+              </ul>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>4.3 Model 3 — Trend Momentum</h3>
+
+      <table>
+        <tbody>
+          <tr>
+            <th>Target Coins</th>
+            <td>Rank 1–50 with volume above $50M</td>
+          </tr>
+          <tr>
+            <th>Strategy Type</th>
+            <td>Strong trend continuation momentum</td>
+          </tr>
+          <tr>
+            <th>Heavy Analysis</th>
+            <td>
+              <ul>
+                <li>EMA 50/200</li>
+                <li>MACD</li>
+                <li>RSI</li>
+                <li>Break of structure (BOS)</li>
+                <li>OHLCV 1D and 4H</li>
+              </ul>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>4.4 Model 4 — Spot Gainers</h3>
+
+      <table>
+        <tbody>
+          <tr>
+            <th>Target Coins</th>
+            <td>Rank 1–200 with top 24h gainers</td>
+          </tr>
+          <tr>
+            <th>Strategy Type</th>
+            <td>Spot trading momentum continuation</td>
+          </tr>
+          <tr>
+            <th>Heavy Analysis</th>
+            <td>
+              <ul>
+                <li>OHLCV 1D</li>
+                <li>Candle pattern criteria</li>
+                <li>Volume spike validation</li>
+                <li>Stop loss calculation</li>
+              </ul>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>5. OHLCV Shared Cache Requirements</h2>
+
+      <ul>
+        <li>All OHLCV data must use centralized caching.</li>
+        <li>Cache key format: <code>symbol_interval</code>.</li>
+        <li>Identical coin/timeframe requests must not trigger repeated fetches.</li>
+        <li>Shared across all analysis models.</li>
+      </ul>
+    </div>
+
+    <div class="section">
+      <h2>6. Watchlist Requirements</h2>
+
+      <h3>6.1 Watchlist Generation</h3>
+      <ul>
+        <li>Each model generates Top 10 candidates.</li>
+        <li>Automatically logged into database.</li>
+      </ul>
+
+      <h3>6.2 Watchlist Monitoring</h3>
+      <ul>
+        <li>Periodic logging every 4 hours.</li>
+        <li>Track OI changes.</li>
+        <li>Track funding rate changes.</li>
+        <li>Track CVD changes.</li>
+      </ul>
+
+      <h3>6.3 Persistence</h3>
+      <ul>
+        <li>Coins failing final validation remain inside watchlist.</li>
+        <li>Historical signal tracking must be retained.</li>
+      </ul>
+    </div>
+
+    <div class="section">
+      <h2>7. Final Confluence Filter Requirements</h2>
+
+      <h3>7.1 Validation Objective</h3>
+      <p>Ensure only high-confidence signals reach trader confirmation stage.</p>
+
+      <h3>7.2 Mandatory Conditions</h3>
+      <ul>
+        <li>All required signals must pass simultaneously.</li>
+        <li>Stop loss distance must be valid.</li>
+        <li>Raw leverage score must exceed 10x equivalent confidence threshold.</li>
+        <li>Skip rule must not be triggered.</li>
+      </ul>
+
+      <h3>7.3 System Actions</h3>
+      <ul>
+        <li>Store final result in database.</li>
+        <li>Trigger notification system.</li>
+        <li>Send candidate to trader UI.</li>
+      </ul>
+    </div>
+
+    <div class="section">
+      <h2>8. Entry Confirmation Panel Requirements</h2>
+
+      <h3>8.1 UI Information</h3>
+      <ul>
+        <li>Entry price</li>
+        <li>Stop loss level</li>
+        <li>Target T1, T2, and T3</li>
+        <li>Recommended leverage</li>
+        <li>Recommended position size ($5–$10)</li>
+      </ul>
+
+      <h3>8.2 Execution Flow</h3>
+      <ul>
+        <li>Trader executes manually at exchange.</li>
+        <li>No auto-trading during early phase implementation.</li>
+      </ul>
+
+      <h3>8.3 Data Retention</h3>
+      <ul>
+        <li>All entries saved into database.</li>
+        <li>Data reusable for backtesting.</li>
+        <li>Data reusable for forward testing.</li>
+        <li>Data reusable for AI optimization training.</li>
+      </ul>
+    </div>
+
+    <div class="section">
+      <h2>9. Performance and Optimization Requirements</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Requirement</th>
+            <th>Target</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Daily API usage</td>
+            <td>5,000–8,000 calls/day</td>
+          </tr>
+          <tr>
+            <td>Optimization target</td>
+            <td>Reduce approximately 95% API usage compared to naive approach</td>
+          </tr>
+          <tr>
+            <td>Pipeline architecture</td>
+            <td>Shared cache and layered filtering mandatory</td>
+          </tr>
+          <tr>
+            <td>System design</td>
+            <td>Asynchronous and scalable</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>10. Future Expansion Requirements</h2>
+
+      <ul>
+        <li>AI scoring optimization layer</li>
+        <li>Adaptive filtering thresholds</li>
+        <li>Automated backtesting engine</li>
+        <li>Forward testing analytics</li>
+        <li>Telegram and mobile push notifications</li>
+        <li>Multi-exchange support</li>
+        <li>Risk management automation</li>
+      </ul>
+    </div>
+
+    <div class="warning">
+      Initial implementation priority should focus on data efficiency, watchlist quality, and consistent signal generation before introducing automated execution.
+    </div>
+
+  </div>
+</body>
+</html>
+```
