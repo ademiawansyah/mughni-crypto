@@ -31,13 +31,18 @@ class CounterTrendServiceTest extends TestCase
         ]);
 
         $marketRegimeService = $this->createMock(MarketRegimeService::class);
+        $marketRegimeService->expects($this->once())
+            ->method('hasPerpetualUsdtSymbol')
+            ->with('TESTUSDT')
+            ->willReturn(true);
+
         $marketRegimeService->expects($this->exactly(3))
-            ->method('getOhlcvDataForCoin')
+            ->method('getFuturesOhlcvDataForCoin')
             ->withAnyParameters()
             ->willReturnMap([
-                ['TEST', '1h', 100, $this->structureKlines()],
-                ['TEST', '15m', 100, $this->entryKlines()],
-                ['TEST', '1d', 10, $this->macroKlines()],
+                ['TESTUSDT', '4h', 100, $this->structureKlines()],
+                ['TESTUSDT', '15m', 100, $this->entryKlines()],
+                ['TESTUSDT', '1d', 10, $this->macroKlines()],
             ]);
 
         $marketRegimeService->expects($this->once())
@@ -52,6 +57,14 @@ class CounterTrendServiceTest extends TestCase
             ->willReturn([
                 ['timestamp' => 1_700_000_000, 'funding_rate' => 0.0002],
                 ['timestamp' => 1_700_086_400, 'funding_rate' => 0.0012],
+            ]);
+
+        $marketRegimeService->expects($this->once())
+            ->method('getCvdMetricsForCoin')
+            ->with('TESTUSDT', 500)
+            ->willReturn([
+                'cvd' => 100_000.0,
+                'cvd_slope' => 1.25,
             ]);
 
         $notificationService = $this->createMock(NotificationService::class);
@@ -70,7 +83,7 @@ class CounterTrendServiceTest extends TestCase
         $this->assertSame(now()->toDateString(), $result['execution_date']);
         $this->assertSame(1, $result['signal_count']);
         $this->assertCount(1, $result['results']);
-        $this->assertSame(100, $result['results'][0]['total_score']);
+        $this->assertSame(105.0, $result['results'][0]['total_score']);
 
         $stored = ModelScanResult::query()
             ->where('model_name', 'counter_trend')
@@ -89,15 +102,19 @@ class CounterTrendServiceTest extends TestCase
         $this->assertTrue($stored->result['results'][0]['components']['fvg_ob_15m']);
         $this->assertTrue($stored->result['results'][0]['components']['oi_declining']);
         $this->assertTrue($stored->result['results'][0]['components']['extreme_funding']);
+        $this->assertTrue($stored->result['results'][0]['components']['cvd_positive']);
         $this->assertFalse($stored->result['results'][0]['components']['derivatives_skipped']);
         $this->assertArrayHasKey('stop_loss', $stored->result['results'][0]['metadata']);
-        $this->assertSame('1H', $stored->result['results'][0]['metadata']['structure_timeframe']);
+        $this->assertSame('4H', $stored->result['results'][0]['metadata']['structure_timeframe']);
         $this->assertSame('15M', $stored->result['results'][0]['metadata']['entry_timeframe']);
         $this->assertSame('1D', $stored->result['results'][0]['metadata']['macro_timeframe']);
         $this->assertTrue($stored->result['results'][0]['metadata']['macro_aligned']);
         $this->assertTrue($stored->result['results'][0]['metadata']['coinalyze_available']);
+        $this->assertSame('binance_futures', $stored->result['results'][0]['metadata']['ohlcv_source']);
+        $this->assertFalse($stored->result['results'][0]['metadata']['derivatives_penalty_applied']);
         $this->assertSame(2, $stored->result['results'][0]['metadata']['oi_points']);
         $this->assertSame(2, $stored->result['results'][0]['metadata']['funding_points']);
+        $this->assertSame(1.25, $stored->result['results'][0]['metadata']['cvd_slope']);
         $this->assertArrayHasKey('fvg_zone_15m', $stored->result['results'][0]['metadata']);
         $this->assertSame(1, $stored->supporting_data['evaluated']);
         $this->assertSame(1, $stored->supporting_data['shortlisted']);

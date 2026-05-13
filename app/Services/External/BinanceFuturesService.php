@@ -85,6 +85,43 @@ class BinanceFuturesService
     }
 
     /**
+     * @return array<int, array<int, mixed>>|null
+     */
+    public function fetchKlines(string $symbol, string $interval, int $limit = 100): ?array
+    {
+        if (! $this->enabled) {
+            return null;
+        }
+
+        $safeLimit = max(1, min($limit, 1500));
+        $normalizedSymbol = strtoupper($symbol);
+        $cacheKey = sprintf('binance:futures:klines:%s:%s:%d', $normalizedSymbol, strtolower($interval), $safeLimit);
+
+        if (Cache::has($cacheKey)) {
+            return Cache::get($cacheKey);
+        }
+
+        $params = [
+            'symbol' => $normalizedSymbol,
+            'interval' => $interval,
+            'limit' => $safeLimit,
+        ];
+
+        $response = $this->sendGet('/klines', $params);
+
+        if (! is_array($response) || $response === []) {
+            return null;
+        }
+
+        /** @var array<int, array<int, mixed>> $klines */
+        $klines = $response;
+
+        Cache::put($cacheKey, $klines, now()->addSeconds($this->cacheTtlSeconds));
+
+        return $klines;
+    }
+
+    /**
      * @return array{funding_rate: float, request_params: array<string, mixed>, raw_response: array<string, mixed>}|null
      */
     public function fetchLatestFundingRate(string $symbol): ?array

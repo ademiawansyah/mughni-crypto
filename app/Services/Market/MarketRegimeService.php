@@ -65,6 +65,52 @@ class MarketRegimeService
     }
 
     /**
+     * Get perpetual futures OHLCV data for a given USDT-margined symbol.
+     *
+     * @return array<int, array<int, mixed>>
+     */
+    public function getFuturesOhlcvDataForCoin(string $symbol, string $interval, int $limit = 20): array
+    {
+        $normalizedSymbol = strtoupper($symbol);
+        $safeLimit = max(1, min($limit, 1500));
+        $cacheKey = sprintf('market_regime:futures:ohlcv:%s:%s:%d', $normalizedSymbol, strtolower($interval), $safeLimit);
+        $cachedData = cache()->get($cacheKey);
+
+        if (is_array($cachedData) && $cachedData !== []) {
+            return $cachedData;
+        }
+
+        $ohlcvData = $this->binanceFuturesService->fetchKlines(
+            symbol: $normalizedSymbol,
+            interval: $interval,
+            limit: $safeLimit,
+        );
+
+        if (! is_array($ohlcvData) || $ohlcvData === []) {
+            Log::warning("[MarketRegimeService] No futures OHLCV data retrieved for {$normalizedSymbol} at interval {$interval}");
+
+            return [];
+        }
+
+        cache()->put($cacheKey, $ohlcvData, self::OHLCV_CACHE_TTL_SECONDS);
+
+        $this->persistMarketData(
+            symbol: $normalizedSymbol,
+            dataType: 'ohlcv',
+            source: 'binance_futures',
+            interval: $interval,
+            payload: $ohlcvData,
+        );
+
+        return $ohlcvData;
+    }
+
+    public function hasPerpetualUsdtSymbol(string $symbol): bool
+    {
+        return $this->binanceFuturesService->hasPerpetualUsdtSymbol(strtoupper($symbol));
+    }
+
+    /**
      * @return array<int, array{sumOpenInterest: float, timestamp: int}>|null
      */
     public function getOpenInterestHistoryForCoin(string $symbol, string $period = '1h', int $limit = 5): ?array
