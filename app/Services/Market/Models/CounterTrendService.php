@@ -36,6 +36,10 @@ class CounterTrendService
 
     private const SCORE_FUNDING = 7;
 
+    private const SCORE_CVD = 5;
+
+    private const DERIVATIVES_UNAVAILABLE_PENALTY = 0.85;
+
     public function __construct(
         private readonly MarketRegimeService $marketRegimeService,
         private readonly ModelOutputStoreService $modelOutputStoreService,
@@ -58,7 +62,7 @@ class CounterTrendService
      */
     public function execute(
         ?string $executionId = null,
-        string $structureTimeframe = '1h',
+        string $structureTimeframe = '4h',
         string $entryTimeframe = '15m',
         string $macroTimeframe = '1d',
     ): array {
@@ -77,24 +81,101 @@ class CounterTrendService
         $failedCoins = [];
 
         foreach ($candidates as $coin) {
-            $structureKlines = $this->fetchAndStoreOhlcv(
-                coin: $coin,
-                timeframe: $structureTimeframe,
-                limit: self::STRUCTURE_LIMIT,
-            );
+            try {
+                $futuresSymbol = strtoupper($coin->symbol).'USDT';
 
-            if ($structureKlines === []) {
-                Log::warning('[CounterTrendService] Skipped coin due to missing OHLCV', [
+                if (! $this->marketRegimeService->hasPerpetualUsdtSymbol($futuresSymbol)) {
+                    $rejectedDto = CounterTrendAnalysisDTO::rejected(
+                        executionId: $resolvedExecutionId,
+                        coinId: $coin->id,
+                        symbol: $coin->symbol,
+                        rejectionReason: 'perpetual_symbol_unavailable',
+                        rejectionContext: [
+                            'symbol' => $futuresSymbol,
+                        ],
+                        score: 0.0,
+                        price: $coin->current_price,
+                    );
+                    $rejectedDtos[] = $rejectedDto;
+                    $failedCoins[] = [
+                        'id' => $rejectedDto->coin_id,
+                        'symbol' => $rejectedDto->symbol,
+                        'reason' => $rejectedDto->rejection_reason,
+                        'context' => $rejectedDto->rejection_context,
+                        'price' => $rejectedDto->price,
+                        'score' => $rejectedDto->score,
+                    ];
+
+                    continue;
+                }
+
+                $structureKlines = $this->fetchAndStoreOhlcv(
+                    futuresSymbol: $futuresSymbol,
+                    timeframe: $structureTimeframe,
+                    limit: self::STRUCTURE_LIMIT,
+                );
+
+                if ($structureKlines === []) {
+                    Log::warning('[CounterTrendService] Skipped coin due to missing OHLCV', [
+                        'execution_id' => $resolvedExecutionId,
+                        'symbol' => $coin->symbol,
+                    ]);
+
+                    $rejectedDto = CounterTrendAnalysisDTO::rejected(
+                        executionId: $resolvedExecutionId,
+                        coinId: $coin->id,
+                        symbol: $coin->symbol,
+                        rejectionReason: 'missing_ohlcv',
+                        rejectionContext: [],
+                        score: 0.0,
+                        price: $coin->current_price,
+                    );
+                    $rejectedDtos[] = $rejectedDto;
+                    $failedCoins[] = [
+                        'id' => $rejectedDto->coin_id,
+                        'symbol' => $rejectedDto->symbol,
+                        'reason' => $rejectedDto->rejection_reason,
+                        'context' => $rejectedDto->rejection_context,
+                        'price' => $rejectedDto->price,
+                        'score' => $rejectedDto->score,
+                    ];
+
+                    continue;
+                }
+
+                $analysis = $this->analyzeCoin(
+                    futuresSymbol: $futuresSymbol,
+                    structureKlines: $structureKlines,
+                    entryKlines: $this->fetchAndStoreOhlcv(
+                        futuresSymbol: $futuresSymbol,
+                        timeframe: $entryTimeframe,
+                        limit: self::ENTRY_LIMIT,
+                    ),
+                    macroKlines: $this->fetchAndStoreOhlcv(
+                        futuresSymbol: $futuresSymbol,
+                        timeframe: $macroTimeframe,
+                        limit: self::MACRO_LIMIT,
+                    ),
+                    currentPrice: $coin->current_price,
+                    structureTimeframe: $structureTimeframe,
+                    entryTimeframe: $entryTimeframe,
+                    macroTimeframe: $macroTimeframe,
+                );
+            } catch (\Throwable $exception) {
+                Log::warning('[CounterTrendService] Coin analysis failed and was skipped', [
                     'execution_id' => $resolvedExecutionId,
                     'symbol' => $coin->symbol,
+                    'error' => $exception->getMessage(),
                 ]);
 
                 $rejectedDto = CounterTrendAnalysisDTO::rejected(
                     executionId: $resolvedExecutionId,
                     coinId: $coin->id,
                     symbol: $coin->symbol,
-                    rejectionReason: 'missing_ohlcv',
-                    rejectionContext: [],
+                    rejectionReason: 'analysis_exception',
+                    rejectionContext: [
+                        'message' => $exception->getMessage(),
+                    ],
                     score: 0.0,
                     price: $coin->current_price,
                 );
@@ -110,25 +191,6 @@ class CounterTrendService
 
                 continue;
             }
-
-            $analysis = $this->analyzeCoin(
-                symbol: $coin->symbol,
-                structureKlines: $structureKlines,
-                entryKlines: $this->fetchAndStoreOhlcv(
-                    coin: $coin,
-                    timeframe: $entryTimeframe,
-                    limit: self::ENTRY_LIMIT,
-                ),
-                macroKlines: $this->fetchAndStoreOhlcv(
-                    coin: $coin,
-                    timeframe: $macroTimeframe,
-                    limit: self::MACRO_LIMIT,
-                ),
-                currentPrice: $coin->current_price,
-                structureTimeframe: $structureTimeframe,
-                entryTimeframe: $entryTimeframe,
-                macroTimeframe: $macroTimeframe,
-            );
 
             if ($analysis['signal'] === null) {
                 $rejectedDto = CounterTrendAnalysisDTO::rejected(
@@ -258,10 +320,10 @@ class CounterTrendService
      *
      * @return array<int, array<int, mixed>>
      */
-    private function fetchAndStoreOhlcv(Coin $coin, string $timeframe, int $limit): array
+    private function fetchAndStoreOhlcv(string $futuresSymbol, string $timeframe, int $limit): array
     {
-        return $this->marketRegimeService->getOhlcvDataForCoin(
-            $coin->symbol,
+        return $this->marketRegimeService->getFuturesOhlcvDataForCoin(
+            $futuresSymbol,
             $timeframe,
             $limit,
         );
@@ -288,7 +350,7 @@ class CounterTrendService
      * }
      */
     private function analyzeCoin(
-        string $symbol,
+        string $futuresSymbol,
         array $structureKlines,
         array $entryKlines,
         array $macroKlines,
@@ -364,7 +426,6 @@ class CounterTrendService
                 'zone_low' => null,
             ];
 
-        $futuresSymbol = strtoupper($symbol).'USDT';
         $oiData = $this->marketRegimeService->getCounterTrendOpenInterestHistoryForCoin(
             symbol: $futuresSymbol,
             interval: '1hour',
@@ -378,11 +439,20 @@ class CounterTrendService
         $derivativesSkipped = $oiData === [] && $fundingData === [];
         $oiDecline = $this->detectOiDecline($oiData);
         $fundingExtreme = $this->detectExtremeFundingRate($fundingData);
+        $cvdMetrics = $this->marketRegimeService->getCvdMetricsForCoin($futuresSymbol, 500);
+        $cvdPositive = ($cvdMetrics['cvd_slope'] ?? 0.0) > 0.0;
 
         $score = self::SCORE_SWEEP + self::SCORE_MSS;
         $score += $fvg['detected'] ? self::SCORE_ENTRY_ZONE : 0;
         $score += $oiDecline ? self::SCORE_OI : 0;
         $score += $fundingExtreme ? self::SCORE_FUNDING : 0;
+        $score += $cvdPositive ? self::SCORE_CVD : 0;
+
+        if ($derivativesSkipped) {
+            $score *= self::DERIVATIVES_UNAVAILABLE_PENALTY;
+        }
+
+        $score = round($score, 2);
 
         $sweepCandle = $candles[$sweep['candle_index']];
         $stopLoss = $sweep['direction'] === 'bullish'
@@ -401,6 +471,7 @@ class CounterTrendService
                     'fvg_ob_15m' => $fvg['detected'],
                     'oi_declining' => $oiDecline,
                     'extreme_funding' => $fundingExtreme,
+                    'cvd_positive' => $cvdPositive,
                     'derivatives_skipped' => $derivativesSkipped,
                 ],
                 'metadata' => [
@@ -410,8 +481,13 @@ class CounterTrendService
                     'strategy' => self::MODEL_NAME,
                     'macro_aligned' => $macroAligned,
                     'coinalyze_available' => $coinalyzeAvailable,
+                    'ohlcv_source' => 'binance_futures',
+                    'derivatives_penalty_applied' => $derivativesSkipped,
+                    'derivatives_penalty_factor' => $derivativesSkipped ? self::DERIVATIVES_UNAVAILABLE_PENALTY : 1.0,
                     'oi_points' => count($oiData),
                     'funding_points' => count($fundingData),
+                    'cvd_slope' => $cvdMetrics['cvd_slope'] ?? null,
+                    'cvd' => $cvdMetrics['cvd'] ?? null,
                     'stop_loss' => $stopLoss,
                     'fvg_zone_15m' => $fvg['detected']
                         ? sprintf('%.6f–%.6f', $fvg['zone_low'], $fvg['zone_high'])
